@@ -1,5 +1,5 @@
 # --- Build stage ---
-FROM node:20-slim AS build
+FROM node:26-slim AS build
 WORKDIR /app
 # better-sqlite3 needs build toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
@@ -9,7 +9,7 @@ COPY src ./src
 RUN npm run build
 
 # --- Runtime stage ---
-FROM node:20-slim AS runtime
+FROM node:26-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json ./
