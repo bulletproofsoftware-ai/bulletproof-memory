@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code",
+      "name": "Permission Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst OLLAMA_URL = 'http://ollama:11434';\n\nasync function qdrantScroll(collection, filter, limit=100) {\n  const body = {limit, with_payload: true, with_vector: false};\n  if (filter) body.filter = filter;\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify(body), url: `${QDRANT_URL}/collections/${collection}/points/scroll`, json: true });\n  return d.result?.points || [];\n}\n\nasync function qdrantStore(collection, id, vector, payload) {\n  await helpers.httpRequest({ \n    method: 'PUT', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: [{id, vector, payload}]}), url: `${QDRANT_URL}/collections/${collection}/points` })\n}\n\nasync function qdrantUpdate(collection, ids, payload) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({payload, points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/payload` });\n}\n\nasync function embed(text) {\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'Content-Type': 'application/json'},\n    body: JSON.stringify({model: 'nomic-embed-text', input: text}), url: `${OLLAMA_URL}/api/embed`, json: true });\n  return d.embeddings?.[0] || null;\n}\n\nfunction uuid() { return ((function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});})()); }\n\nconst agents = await qdrantScroll('nhi_lifecycle', null, 100);\nconst now = Date.now();\nconst unusedPermissions = [];\n\nfor (const a of agents) {\n  const payload = a.payload || {};\n  if (payload.state !== 'ACTIVE') continue;\n\n  const permUsage = payload.permission_usage || {};\n  const permissions = payload.permissions || [];\n\n  for (const perm of permissions) {\n    const lastUsed = permUsage[perm];\n    if (!lastUsed) {\n      unusedPermissions.push({agent: payload.name, permission: perm, unused_days: 'never'});\n    } else {\n      const daysSince = (now - new Date(lastUsed).getTime()) / (24*60*60*1000);\n      if (daysSince > 30) {\n        unusedPermissions.push({agent: payload.name, permission: perm, unused_days: Math.floor(daysSince)});\n      }\n    }\n  }\n}\n\n// Log review\nconst vec = await embed('permission review ' + unusedPermissions.length + ' unused');\nif (vec) {\n  await qdrantStore('audit_log', uuid(), vec, {\n    action: 'PERMISSION_REVIEW', timestamp: new Date().toISOString(),\n    details: {unused_count: unusedPermissions.length, items: unusedPermissions.slice(0, 20)},\n    sensitivity: 'internal', project: 'global'\n  });\n}\n\nreturn [{json: {agents_checked: agents.length, unused_permissions: unusedPermissions.length, details: unusedPermissions.slice(0,10)}}];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Permission Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "c9073bddb15250c6",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Permission Review"
+}

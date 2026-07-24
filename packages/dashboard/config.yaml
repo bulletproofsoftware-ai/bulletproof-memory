@@ -1,0 +1,88 @@
+# Memory Dashboard Configuration
+qdrant_url: http://qdrant:6333
+ollama_url: http://host.docker.internal:11434
+embed_model: nomic-embed-text
+vector_size: 768
+
+# Collection coverage is now DISCOVERED at runtime from the live Qdrant
+# (see app/discovery.py). The dashboard lists whatever collections actually
+# exist, so new ones appear automatically and this file never drifts again.
+#
+# The `categories` map below is advisory only — it groups + labels known
+# collections for the UI. Unknown/new collections fall into "other" and still
+# render. It is NOT an allowlist.
+categories:
+  groups:
+    tiers: [claude_memories, memories_hot, memories_warm, memories_cold, short_term_memory, working_memory]
+    knowledge: [episodes, learnings, procedures, trajectories, heuristics, process_knowledge, world_model, abstractions, knowledge_anchors, skills, discovered_skills]
+    governance: [constitutional_assessments, constitutional_contracts, self_assessment, self_assessments, red_team_campaigns, compliance_dashboard, compliance_trends, agent_behavioral_baselines, formal_verification, guardrail_proof, injection_signatures, memory_quarantine, memory_rejected, verifications, permissions]
+    agents: [agent_identities, agent_marketplace, a2a_agents, delegation_tokens, task_specialization, swarm_runs, coordination_scores, meta_agent_assessments]
+    sessions: [tg_sessions, session_recordings, session_transcripts]
+    corpus: [obsidian_docs, file_search, multimodal_artifacts]
+    graph: [memory_links]
+    workflow: [workflow_flows, compiled_workflows, workflow_optimizations, temporal_plans, dev_environments, sandbox_runs, semantic_diffs]
+    ops: [audit_log, consolidation_cycles, tier_transitions, predictive_patterns, pheromone_trails, cost_routing, bft_consensus, benchmark_runs, benchmarks, kernel_stream_state, federation_registry, data_sovereignty, sovereignty_zones]
+  prefixes:
+    clue_: security
+    nhi_: agents
+  labels:
+    claude_memories: Long-Term Memories
+    memories_hot: Hot Tier
+    memories_warm: Warm Tier
+    memories_cold: Cold Tier
+    short_term_memory: Short-Term Memory
+    working_memory: Working Memory
+    obsidian_docs: Obsidian Docs (RAG)
+    file_search: File Search (RAG)
+    tg_sessions: Telegram Sessions
+    session_recordings: Session Recordings
+    memory_links: Memory Links
+    nhi_lifecycle: NHI Lifecycle
+    nhi_transitions: NHI Transitions
+    a2a_agents: A2A Agents
+    audit_log: Audit Log
+
+# Minimal shim of named collections still referenced by core routes
+# (each also has a code-level default, so this is belt-and-suspenders).
+collections:
+  long_term: claude_memories
+  links: memory_links
+  audit_log: audit_log
+  session_transcripts: session_transcripts
+  memories_hot: memories_hot
+
+# Curated view collection sets (read-only aggregation pages)
+tiers_collections: [memories_hot, memories_warm, memories_cold, claude_memories, short_term_memory, working_memory]
+knowledge_collections: [episodes, learnings, procedures, trajectories, heuristics, process_knowledge, world_model]
+governance_collections: [constitutional_assessments, self_assessments, agent_behavioral_baselines, red_team_campaigns, compliance_dashboard, compliance_trends]
+session_collections: [tg_sessions, session_recordings]
+corpus_collections: [obsidian_docs, file_search]
+
+# Search defaults
+search_limit: 20
+search_threshold: 0.5
+
+# Pagination
+page_size: 25
+
+# Memory types for filtering
+memory_types:
+  - preference
+  - fact
+  - context
+  - decision
+
+# Decisions log (a Postgres-backed table of logged decisions).
+# Connection values come from env DECISIONS_PG_* ; these are documentation defaults.
+decisions_pg_host: localhost
+decisions_pg_port: 5432
+decisions_pg_user: postgres
+decisions_pg_db: postgres
+
+# claude-memory-postgres (relational memory backend: COLD tier, episodes,
+# session_transcripts, operational audit, DRM canary). Connection values come
+# from env MEMPG_* (set in docker-compose); these are documentation defaults.
+mempg_host: claude-memory-postgres
+mempg_port: 5432
+mempg_user: claude_memory
+mempg_db: claude_memory

@@ -1,0 +1,22 @@
+# gitleaks configuration for bulletproof-memory
+#
+# Extends the default gitleaks ruleset and allowlists known false positives:
+# references to key-FILE PATHS (loaded at runtime from env or the gitignored
+# keys/ dir). No secret material is committed — keys/ is gitignored and absent
+# from the repo.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist path-reference false positives (no secret material present)"
+regexTargets = ["match", "line"]
+regexes = [
+  # Env-var / path references to the ed25519 key FILES (not the keys themselves).
+  '''ED25519_(PRIVATE|PUBLIC)_KEY_PATH''',
+  '''ed25519-(private|public)\.pem''',
+]
+paths = [
+  # Documentation of env vars in examples is not a secret.
+  '''\.env\.example$''',
+]

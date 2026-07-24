@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code",
+      "name": "Compliance Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst OLLAMA_URL = 'http://ollama:11434';\n\nasync function qdrantScroll(collection, filter, limit=100) {\n  const body = {limit, with_payload: true, with_vector: false};\n  if (filter) body.filter = filter;\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify(body), url: `${QDRANT_URL}/collections/${collection}/points/scroll`, json: true });\n  return d.result?.points || [];\n}\n\nasync function qdrantStore(collection, id, vector, payload) {\n  await helpers.httpRequest({ \n    method: 'PUT', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: [{id, vector, payload}]}), url: `${QDRANT_URL}/collections/${collection}/points` })\n}\n\nasync function qdrantUpdate(collection, ids, payload) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({payload, points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/payload` });\n}\n\nasync function embed(text) {\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'Content-Type': 'application/json'},\n    body: JSON.stringify({model: 'nomic-embed-text', input: text}), url: `${OLLAMA_URL}/api/embed`, json: true });\n  return d.embeddings?.[0] || null;\n}\n\nfunction uuid() { return ((function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});})()); }\n\n// Fetch all audit events from past 30 days\nconst now = new Date();\nconst thirtyDaysAgo = new Date(now.getTime() - 30*24*60*60*1000).toISOString();\nconst events = await qdrantScroll('audit_log', null, 5000);\nconst recent = events.filter(e => (e.payload?.timestamp || '') >= thirtyDaysAgo);\n\n// Count by action type\nconst actionCounts = {};\nfor (const e of recent) {\n  const action = e.payload?.action || 'unknown';\n  actionCounts[action] = (actionCounts[action] || 0) + 1;\n}\n\n// Simple compliance score: percentage of governed action types present\nconst governedActions = ['store', 'recall', 'classify', 'POLICY_DENY', 'TRUST_DENY', 'DATA_CLASSIFICATION',\n  'episode_start', 'episode_complete', 'learning_store', 'procedure_capture', 'benchmark_record', 'expire'];\nconst presentActions = governedActions.filter(a => actionCounts[a] > 0);\nconst score = Math.round((presentActions.length / governedActions.length) * 100);\n\n// Store report\nconst reportId = uuid();\nconst vec = await embed('monthly compliance report score ' + score);\nif (vec) {\n  await qdrantStore('compliance_trends', reportId, vec, {\n    report_id: reportId, generated_at: now.toISOString(),\n    period_start: thirtyDaysAgo, period_end: now.toISOString(),\n    total_events: recent.length, action_breakdown: actionCounts,\n    compliance_score: score, governed_actions_present: presentActions,\n    governed_actions_missing: governedActions.filter(a => !actionCounts[a])\n  });\n}\n\n// Also log to audit\nconst auditVec = await embed('compliance report generated score ' + score);\nif (auditVec) {\n  await qdrantStore('audit_log', uuid(), auditVec, {\n    action: 'compliance_report_generated', timestamp: now.toISOString(),\n    details: {score, events: recent.length, missing: governedActions.filter(a => !actionCounts[a])},\n    sensitivity: 'internal', project: 'global'\n  });\n}\n\nreturn [{json: {score, total_events: recent.length, actions: Object.keys(actionCounts).length, missing: governedActions.filter(a => !actionCounts[a])}}];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Compliance Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "666aa55bdd3844e4",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Compliance Report"
+}

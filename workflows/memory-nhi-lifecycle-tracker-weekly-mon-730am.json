@@ -1,0 +1,369 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Mon 7:30AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "30 7 * * 1",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_identities",
+      "name": "Scroll Identities",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":100,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/agent_identities/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "scroll_audit",
+      "name": "Scroll Recent Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points/scroll"
+      },
+      "position": [
+        220,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "compute_lifecycle",
+      "name": "Compute Lifecycle Stats",
+      "parameters": {
+        "jsCode": "const identities = $('Scroll Identities').first().json.result?.points || [];\nconst auditPoints = $('Scroll Recent Audit').first().json.result?.points || [];\n\nconst weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;\nconst monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;\n\n// Build activity map from audit\nconst activityMap = new Map();\nfor (const p of auditPoints) {\n  const payload = p.payload || {};\n  const caller = payload.caller || payload.agent_name || '';\n  if (!caller) continue;\n  if (!activityMap.has(caller)) activityMap.set(caller, { weekly: 0, monthly: 0, last_action: '', last_ts: '' });\n  const a = activityMap.get(caller);\n  const ts = new Date(payload.timestamp || 0).getTime();\n  if (ts > weekAgo) a.weekly++;\n  if (ts > monthAgo) a.monthly++;\n  if (!a.last_ts || payload.timestamp > a.last_ts) {\n    a.last_ts = payload.timestamp;\n    a.last_action = payload.action || '';\n  }\n}\n\nconst results = identities.map(i => {\n  const name = i.payload?.name || i.payload?.agent_name || '';\n  const activity = activityMap.get(name) || { weekly: 0, monthly: 0, last_action: 'none', last_ts: '' };\n  let status = 'active';\n  if (activity.weekly === 0 && activity.monthly === 0) status = 'dormant';\n  else if (activity.weekly === 0) status = 'inactive';\n  \n  return {\n    identity_id: i.id,\n    name: name,\n    lifecycle_status: status,\n    weekly_actions: activity.weekly,\n    monthly_actions: activity.monthly,\n    last_action: activity.last_action,\n    last_active: activity.last_ts\n  };\n});\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results.map(r => ({ json: { ...r, _empty: false } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_results",
+      "name": "Has Results",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Identities",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "embed",
+      "name": "Embed Lifecycle",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'NHI lifecycle: ' + $json.name + ' status=' + $json.lifecycle_status + ' weekly=' + $json.weekly_actions + ' monthly=' + $json.monthly_actions}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build Lifecycle Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst lc = $('Loop Identities').first().json;\nif (!embedding) return { json: { _skip: true } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        identity_id: lc.identity_id,\n        name: lc.name,\n        lifecycle_status: lc.lifecycle_status,\n        weekly_actions: lc.weekly_actions,\n        monthly_actions: lc.monthly_actions,\n        last_action: lc.last_action,\n        last_active: lc.last_active,\n        assessed_at: new Date().toISOString(),\n        source: 'auto_lifecycle_tracker'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_point",
+      "name": "Store Lifecycle",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/nhi_lifecycle/points"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "parameters": {
+        "jsCode": "return [{ json: { tracked: 0, message: 'no identities to track' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nhi-lifecycle",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "c12d62ab-6c79-4724-831a-47b0478f0469"
+    }
+  ],
+  "connections": {
+    "Build Lifecycle Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Lifecycle",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Compute Lifecycle Stats": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Results",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Lifecycle": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Lifecycle Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Results": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summary",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Identities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Identities": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Embed Lifecycle",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Identities": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compute Lifecycle Stats",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Recent Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Identities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Store Lifecycle": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Identities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Recent Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Weekly Mon 7:30AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Identities",
+            "type": "main"
+          },
+          {
+            "index": 0,
+            "node": "Scroll Recent Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "eb9c8dc41aec2054",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: NHI Lifecycle Tracker (Weekly Mon 7:30AM)"
+}

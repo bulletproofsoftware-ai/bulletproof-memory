@@ -1,0 +1,526 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 1:30AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "30 1 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_memories",
+      "name": "Scroll All Memories",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/claude_memories/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "prepare",
+      "name": "Prepare for Analysis",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst memories = response.result?.points || [];\nif (!memories.length) return [{ json: { _empty: true, prompt: '', total_memories: 0 } }];\n\nconst groups = {};\nfor (const m of memories) {\n  const p = m.payload || {};\n  if (p.status === 'pruned' || p.status === 'archived') continue;\n  const key = (p.project || 'global') + '/' + (p.type || 'unknown');\n  if (!groups[key]) groups[key] = [];\n  groups[key].push({\n    id: m.id,\n    content: (p.content || '').slice(0, 400),\n    type: p.type,\n    project: p.project || 'global',\n    created: p.created_at,\n    tags: (p.tags || []).join(','),\n    status: p.status || 'active',\n    relevance: p.relevance_score || 1.0\n  });\n}\n\nlet prompt = 'You are a memory hygiene analyst for a persistent AI memory system. Below are memories grouped by project/type.\\n\\n';\nprompt += 'Find HIGH CONFIDENCE issues only:\\n';\nprompt += '1. CONTRADICTIONS: Two memories that directly conflict about the same topic\\n';\nprompt += '2. DUPLICATES: Memories saying essentially the same thing (not just related)\\n';\nprompt += '3. SUPERSEDED: Older memories made obsolete by newer ones on the same topic\\n\\n';\n\nlet activeCount = 0;\nfor (const [group, mems] of Object.entries(groups)) {\n  prompt += `--- ${group} (${mems.length}) ---\\n`;\n  for (const m of mems) {\n    prompt += `[${m.id}] (${m.created || '?'} | rel:${m.relevance}) ${m.content}\\n`;\n    activeCount++;\n  }\n  prompt += '\\n';\n}\n\nprompt += '\\nRespond with ONLY a JSON array. Each element:\\n';\nprompt += '{\"action\":\"tag_outdated\"|\"tag_duplicate\"|\"tag_conflict\",\"memory_id\":\"<id>\",\"reason\":\"<brief explanation>\",\"related_id\":\"<id of the newer/conflicting memory>\",\"confidence\":\"high\"|\"medium\"}\\n';\nprompt += 'Only include HIGH confidence findings. If nothing found, return []\\n';\nprompt += 'For duplicates, tag the OLDER one. For conflicts, tag the one that appears wrong or outdated.';\n\nreturn [{ json: { _empty: false, prompt, total_memories: activeCount, groups: Object.keys(groups).length } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check_empty_scroll",
+      "name": "Has Memories",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check-empty",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "log_no_memories",
+      "name": "Log No Memories",
+      "parameters": {
+        "jsCode": "return [{ json: { status: 'skipped', reason: 'no active memories found', actions: 0 } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "claude_analyze",
+      "name": "Claude Analyze Conflicts",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:4096,messages:[{role:'user',content:$json.prompt}]}) }}",
+        "method": "POST",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "https://api.anthropic.com/v1/messages"
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "parse_actions",
+      "name": "Parse Actions",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst text = response.content?.[0]?.text || '[]';\n\nlet actions = [];\ntry {\n  const match = text.match(/\\[[\\s\\S]*\\]/);\n  if (match) actions = JSON.parse(match[0]);\n} catch (e) {\n  return [{ json: { _empty: true, error: e.message, raw: text.slice(0, 500), total_actions: 0 } }];\n}\n\nif (!actions.length) {\n  return [{ json: { _empty: true, total_actions: 0 } }];\n}\n\n// Filter to high confidence only\nconst highConf = actions.filter(a => a.confidence !== 'low');\nif (!highConf.length) {\n  return [{ json: { _empty: true, total_actions: 0, filtered_out: actions.length } }];\n}\n\nreturn highConf.map(a => ({\n  json: { ...a, _empty: false, total_actions: highConf.length }\n}));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_actions",
+      "name": "Has Actions",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check-actions",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "log_clean",
+      "name": "Log Clean",
+      "parameters": {
+        "jsCode": "const prep = $('Prepare for Analysis').first().json;\nreturn [{ json: { status: 'clean', total_memories: prep.total_memories, conflicts: 0, duplicates: 0, outdated: 0 } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "loop_actions",
+      "name": "Loop Actions",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        1540,
+        500
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "tag_memory",
+      "name": "Tag Memory in Qdrant",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({payload:{conflict_status:$json.action,conflict_reason:$json.reason,conflict_related_id:$json.related_id || null,conflict_detected_at:new Date().toISOString(),conflict_confidence:$json.confidence || 'high'},points:[$json.memory_id]}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/claude_memories/points/payload"
+      },
+      "position": [
+        1760,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summarize_results",
+      "name": "Summarize Results",
+      "parameters": {
+        "jsCode": "const actions = $('Parse Actions').all().filter(i => !i.json._empty);\nconst prep = $('Prepare for Analysis').first().json;\n\nconst conflicts = actions.filter(a => a.json.action === 'tag_conflict').length;\nconst duplicates = actions.filter(a => a.json.action === 'tag_duplicate').length;\nconst outdated = actions.filter(a => a.json.action === 'tag_outdated').length;\n\nconst details = actions.slice(0, 20).map(a => `${a.json.action}: ${a.json.reason} [${a.json.memory_id}]`);\n\nreturn [{ json: {\n  status: 'resolved',\n  total_memories_scanned: prep.total_memories,\n  groups_analyzed: prep.groups,\n  conflicts_found: conflicts,\n  duplicates_found: duplicates,\n  outdated_found: outdated,\n  total_tagged: actions.length,\n  details\n} }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "embed_audit",
+      "name": "Embed Audit",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text',prompt:'daily conflict resolution: ' + $json.total_tagged + ' issues found, ' + $json.conflicts_found + ' conflicts, ' + $json.duplicates_found + ' duplicates, ' + $json.outdated_found + ' outdated'}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1980,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_audit",
+      "name": "Build Audit Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nif (!embedding) return { json: { error: 'no embedding' } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nlet summary;\ntry { summary = $('Summarize Results').first().json; } catch {}\nif (!summary) try { summary = $('Log Clean').first().json; } catch {}\nif (!summary) try { summary = $('Log No Memories').first().json; } catch {}\nif (!summary) summary = { status: 'unknown' };\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        action: 'CONFLICT_RESOLUTION_CYCLE',\n        timestamp: new Date().toISOString(),\n        details: summary,\n        sensitivity: 'internal',\n        project: 'global'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        2200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_audit",
+      "name": "Store Audit",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points"
+      },
+      "position": [
+        2420,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Build Audit Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Claude Analyze Conflicts": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Parse Actions",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 1:30AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll All Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Audit Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Actions": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Clean",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Actions",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log No Memories",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Claude Analyze Conflicts",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Log Clean": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Log No Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Actions": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summarize Results",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Tag Memory in Qdrant",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Parse Actions": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Actions",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Prepare for Analysis": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll All Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Prepare for Analysis",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Summarize Results": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Tag Memory in Qdrant": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Actions",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "f27cb012eb98025a",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Daily Conflict Resolver (1:30AM)"
+}

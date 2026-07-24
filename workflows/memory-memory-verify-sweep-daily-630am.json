@@ -1,0 +1,312 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 6:30AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "30 6 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_warm",
+      "name": "Scroll Warm Memories",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":100,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/memories_warm/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "filter_old",
+      "name": "Filter Old Memories",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst points = response.result?.points || [];\nconst thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;\nconst oldMemories = [];\n\nfor (const p of points) {\n  const payload = p.payload || {};\n  const lastVerified = new Date(payload.last_verified || payload.created_at || 0).getTime();\n  if (lastVerified < thirtyDaysAgo) {\n    oldMemories.push({\n      memory_id: p.id,\n      content: (payload.content || payload.text || '').substring(0, 100),\n      last_verified: payload.last_verified || 'never'\n    });\n  }\n}\n\nif (oldMemories.length === 0) {\n  return [{ json: { _empty: true, count: 0 } }];\n}\n\nreturn oldMemories.map(m => ({ json: { ...m, _empty: false } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_old",
+      "name": "Has Old Memories",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Memories",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "call_verify",
+      "name": "Call Memory Verify",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({tool:'memory_verify', args:{memory_id: $json.memory_id}}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://mcp-server:5681/tools/call"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "embed_audit",
+      "name": "Embed Audit",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'memory verify sweep daily ' + new Date().toISOString().split('T')[0] + ' no old memories found'}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_audit",
+      "name": "Build Audit Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nif (!embedding) return { json: { error: 'no embedding' } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        action: 'MEMORY_VERIFY_SWEEP',\n        tool: 'memory_verify',\n        verified_count: 0,\n        note: 'no old memories requiring verification',\n        timestamp: new Date().toISOString(),\n        source: 'n8n_scheduled'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1100,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_audit",
+      "name": "Store Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points"
+      },
+      "position": [
+        1320,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Build Audit Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Call Memory Verify": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 6:30AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Warm Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Audit Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Filter Old Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Old Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Old Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Memories": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Call Memory Verify",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Warm Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Filter Old Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "36902be34ab5caa0",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Memory Verify Sweep (Daily 6:30AM)"
+}

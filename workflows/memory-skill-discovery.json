@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * 0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code",
+      "name": "Skill Discovery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst OLLAMA_URL = 'http://ollama:11434';\n\nasync function qdrantScroll(collection, filter, limit=100) {\n  const body = {limit, with_payload: true, with_vector: false};\n  if (filter) body.filter = filter;\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify(body), url: `${QDRANT_URL}/collections/${collection}/points/scroll`, json: true });\n  return d.result?.points || [];\n}\n\nasync function qdrantStore(collection, id, vector, payload) {\n  await helpers.httpRequest({ \n    method: 'PUT', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: [{id, vector, payload}]}), url: `${QDRANT_URL}/collections/${collection}/points` })\n}\n\nasync function qdrantUpdate(collection, ids, payload) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({payload, points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/payload` });\n}\n\nasync function embed(text) {\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'Content-Type': 'application/json'},\n    body: JSON.stringify({model: 'nomic-embed-text', input: text}), url: `${OLLAMA_URL}/api/embed`, json: true });\n  return d.embeddings?.[0] || null;\n}\n\nfunction uuid() { return ((function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});})()); }\n\nconst trajectories = await qdrantScroll('trajectories', null, 200);\nconst now = Date.now();\nconst recent = trajectories.filter(t => {\n  const created = new Date(t.payload?.created_at || 0).getTime();\n  return (now - created) < 30 * 24 * 60 * 60 * 1000; // last 30 days\n});\n\n// Extract tool sequences\nconst sequences = {};\nfor (const t of recent) {\n  const tools = t.payload?.tool_sequence || t.payload?.steps || [];\n  if (!Array.isArray(tools) || tools.length < 3) continue;\n\n  const key = tools.slice(0, 5).join(' -> ');\n  if (!sequences[key]) sequences[key] = {count: 0, tools, examples: []};\n  sequences[key].count++;\n  sequences[key].examples.push(t.id);\n}\n\n// Find patterns (3+ occurrences)\nconst patterns = Object.entries(sequences).filter(([,v]) => v.count >= 3);\nlet proposed = 0;\n\nfor (const [key, pattern] of patterns) {\n  const vec = await embed('skill pattern: ' + key);\n  if (vec) {\n    await qdrantStore('discovered_skills', uuid(), vec, {\n      pattern: key, tool_sequence: pattern.tools, occurrence_count: pattern.count,\n      example_trajectories: pattern.examples.slice(0, 5),\n      proposed_at: new Date().toISOString(), status: 'proposed',\n      source: 'auto-discovered'\n    });\n    proposed++;\n  }\n}\n\nreturn [{json: {trajectories_analyzed: recent.length, patterns_found: patterns.length, skills_proposed: proposed}}];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Skill Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "cf90c65402df9feb",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Skill Discovery"
+}

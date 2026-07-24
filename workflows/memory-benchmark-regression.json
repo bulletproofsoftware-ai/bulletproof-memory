@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code",
+      "name": "Benchmark Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst OLLAMA_URL = 'http://ollama:11434';\n\nasync function qdrantScroll(collection, filter, limit=100) {\n  const body = {limit, with_payload: true, with_vector: false};\n  if (filter) body.filter = filter;\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify(body), url: `${QDRANT_URL}/collections/${collection}/points/scroll`, json: true });\n  return d.result?.points || [];\n}\n\nasync function qdrantStore(collection, id, vector, payload) {\n  await helpers.httpRequest({ \n    method: 'PUT', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: [{id, vector, payload}]}), url: `${QDRANT_URL}/collections/${collection}/points` })\n}\n\nasync function qdrantUpdate(collection, ids, payload) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({payload, points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/payload` });\n}\n\nasync function embed(text) {\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'Content-Type': 'application/json'},\n    body: JSON.stringify({model: 'nomic-embed-text', input: text}), url: `${OLLAMA_URL}/api/embed`, json: true });\n  return d.embeddings?.[0] || null;\n}\n\nfunction uuid() { return ((function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});})()); }\n\nconst benchmarks = await qdrantScroll('benchmark_runs', null, 20);\nif (benchmarks.length < 2) return [{json: {status: 'insufficient_data', runs: benchmarks.length}}];\n\n// Sort by timestamp desc\nbenchmarks.sort((a,b) => (b.payload?.timestamp || '').localeCompare(a.payload?.timestamp || ''));\n\nconst latest = benchmarks[0]?.payload || {};\nconst previous = benchmarks[1]?.payload || {};\nconst regressions = [];\n\nconst metrics = ['completion_rate', 'avg_steps', 'avg_cost', 'error_rate', 'governance_compliance'];\nfor (const metric of metrics) {\n  const curr = latest[metric];\n  const prev = previous[metric];\n  if (curr == null || prev == null || prev === 0) continue;\n\n  const change = ((curr - prev) / prev) * 100;\n  // For error_rate and avg_cost, increase is bad. For others, decrease is bad.\n  const isRegression = ['error_rate', 'avg_cost', 'avg_steps'].includes(metric) ? change > 10 : change < -10;\n\n  if (isRegression) {\n    regressions.push({metric, current: curr, previous: prev, change_pct: Math.round(change * 10) / 10});\n  }\n}\n\nif (regressions.length > 0) {\n  const vec = await embed('benchmark regression detected: ' + regressions.map(r=>r.metric).join(', '));\n  if (vec) {\n    await qdrantStore('audit_log', uuid(), vec, {\n      action: 'BENCHMARK_REGRESSION', timestamp: new Date().toISOString(),\n      details: {regressions, latest_run: latest.timestamp, previous_run: previous.timestamp},\n      sensitivity: 'internal', project: 'global'\n    });\n  }\n}\n\nreturn [{json: {regressions: regressions.length, details: regressions}}];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Benchmark Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "659ac3e1eb3ac39c",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Benchmark Regression"
+}

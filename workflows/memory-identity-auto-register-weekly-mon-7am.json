@@ -1,0 +1,369 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Mon 7AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 7 * * 1",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_audit",
+      "name": "Scroll Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "scroll_identities",
+      "name": "Scroll Existing Identities",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":100,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/agent_identities/points/scroll"
+      },
+      "position": [
+        220,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "find_new",
+      "name": "Find New Agents",
+      "parameters": {
+        "jsCode": "const auditPoints = $('Scroll Audit').first().json.result?.points || [];\nconst identities = $('Scroll Existing Identities').first().json.result?.points || [];\n\nconst existingNames = new Set(identities.map(i => i.payload?.name || i.payload?.agent_name).filter(Boolean));\nconst weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;\n\nconst agentMap = new Map();\nfor (const p of auditPoints) {\n  const payload = p.payload || {};\n  const ts = new Date(payload.timestamp || 0).getTime();\n  if (ts < weekAgo) continue;\n  \n  const caller = payload.caller || payload.agent_name || payload.session_id;\n  if (!caller || existingNames.has(caller)) continue;\n  \n  if (!agentMap.has(caller)) {\n    agentMap.set(caller, {\n      agent_name: caller,\n      first_seen: payload.timestamp || new Date().toISOString(),\n      last_seen: payload.timestamp || new Date().toISOString(),\n      action_count: 0,\n      projects: new Set()\n    });\n  }\n  const a = agentMap.get(caller);\n  a.action_count++;\n  a.last_seen = payload.timestamp || a.last_seen;\n  if (payload.project) a.projects.add(payload.project);\n}\n\nconst newAgents = Array.from(agentMap.values()).map(a => ({ ...a, projects: Array.from(a.projects) }));\n\nif (newAgents.length === 0) {\n  return [{ json: { _empty: true } }];\n}\nreturn newAgents.map(a => ({ json: { ...a, _empty: false } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_new",
+      "name": "Has New",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Agents",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "embed",
+      "name": "Embed Identity",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'agent identity: ' + $json.agent_name + ' projects=' + ($json.projects || []).join(',') + ' actions=' + $json.action_count}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build Identity Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst agent = $('Loop Agents').first().json;\nif (!embedding) return { json: { _skip: true } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        name: agent.agent_name,\n        agent_type: 'discovered',\n        first_seen: agent.first_seen,\n        last_seen: agent.last_seen,\n        action_count: agent.action_count,\n        projects: agent.projects,\n        registered_at: new Date().toISOString(),\n        source: 'auto_audit_discovery'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_point",
+      "name": "Store Identity",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/agent_identities/points"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "parameters": {
+        "jsCode": "return [{ json: { registered: 0, message: 'no new agents found' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "identity-register",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "6742e011-9323-41f6-aa24-c715c610dfaf"
+    }
+  ],
+  "connections": {
+    "Build Identity Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Identity",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Identity": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Identity Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Find New Agents": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has New",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has New": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summary",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Agents",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Agents": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Embed Identity",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Find New Agents",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Existing Identities": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Store Identity": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Agents",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Existing Identities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Weekly Mon 7AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Audit",
+            "type": "main"
+          },
+          {
+            "index": 0,
+            "node": "Scroll Existing Identities",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "88bc831424f0ad07",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Identity Auto-Register (Weekly Mon 7AM)"
+}

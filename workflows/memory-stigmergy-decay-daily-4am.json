@@ -1,0 +1,282 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 4AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 4 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_trails",
+      "name": "Scroll Pheromone Trails",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":200,\"with_payload\":true,\"with_vector\":true}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/pheromone_trails/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "apply_decay",
+      "name": "Apply Decay",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst trails = response.result?.points || [];\nconst DECAY_FACTOR = 0.95;\nconst EVAPORATION_THRESHOLD = 0.1;\nconst now = new Date().toISOString();\n\nconst toUpdate = [];\nconst toDelete = [];\n\nfor (const t of trails) {\n  const strength = (t.payload?.strength || 1.0) * DECAY_FACTOR;\n  if (strength < EVAPORATION_THRESHOLD) {\n    toDelete.push(t.id);\n  } else {\n    toUpdate.push({\n      id: t.id,\n      vector: t.vector,\n      payload: { ...t.payload, strength, last_decayed: now }\n    });\n  }\n}\n\nreturn [{ json: {\n  total: trails.length,\n  updated: toUpdate.length,\n  evaporated: toDelete.length,\n  updates: toUpdate,\n  deletes: toDelete\n} }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_updates",
+      "name": "Has Updates",
+      "parameters": {
+        "conditions": {
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "check-updates",
+              "leftValue": "={{ $json.updated }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            },
+            {
+              "id": "check-deletes",
+              "leftValue": "={{ $json.evaporated }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "batch_upsert",
+      "name": "Batch Upsert Decayed",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ $json.updates.length > 0 ? JSON.stringify({points: $json.updates}) : JSON.stringify({points: []}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/pheromone_trails/points"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "batch_delete",
+      "name": "Delete Evaporated",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points: $('Apply Decay').first().json.deletes}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/pheromone_trails/points/delete"
+      },
+      "position": [
+        1100,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "has_deletes",
+      "name": "Has Deletes",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check-del",
+              "leftValue": "={{ $('Apply Decay').first().json.evaporated }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1100,
+        100
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    }
+  ],
+  "connections": {
+    "Apply Decay": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Updates",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Batch Upsert Decayed": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Deletes",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 4AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Pheromone Trails",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Deletes": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Delete Evaporated",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Updates": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Batch Upsert Decayed",
+            "type": "main"
+          }
+        ],
+        []
+      ]
+    },
+    "Scroll Pheromone Trails": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Apply Decay",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "f0bc276360db4560",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Stigmergy Decay (Daily 4AM)"
+}

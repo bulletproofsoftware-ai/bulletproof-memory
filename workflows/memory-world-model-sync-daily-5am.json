@@ -1,0 +1,324 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 5AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 5 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_audit",
+      "name": "Scroll Audit Log",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":200,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "extract_entities",
+      "name": "Extract Entities",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst points = response.result?.points || [];\nconst entityMap = new Map();\nconst dayAgo = Date.now() - 24 * 60 * 60 * 1000;\n\nfor (const p of points) {\n  const payload = p.payload || {};\n  const project = payload.project;\n  const action = payload.action || '';\n  const ts = new Date(payload.timestamp || 0).getTime();\n  \n  // Only process last 24h of audit events\n  if (ts < dayAgo) continue;\n  \n  if (project && project !== 'unknown') {\n    if (!entityMap.has('project:' + project)) {\n      entityMap.set('project:' + project, {\n        entity_type: 'project',\n        entity_id: project,\n        name: project,\n        last_activity: payload.timestamp || new Date().toISOString(),\n        activity_count: 0,\n        recent_actions: []\n      });\n    }\n    const e = entityMap.get('project:' + project);\n    e.activity_count++;\n    if (e.recent_actions.length < 5) e.recent_actions.push(action);\n  }\n}\n\nconst entities = Array.from(entityMap.values());\nif (entities.length === 0) {\n  return [{ json: { _empty: true } }];\n}\nreturn entities.map(e => ({ json: { ...e, _empty: false } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_entities",
+      "name": "Has Entities",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Entities",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "embed_entity",
+      "name": "Embed Entity",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: $json.entity_type + ' ' + $json.name + ' ' + $json.recent_actions.join(', ')}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build World Model Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst entity = $('Loop Entities').first().json;\nif (!embedding) return { json: { _skip: true } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        entity_type: entity.entity_type,\n        entity_id: entity.entity_id,\n        name: entity.name,\n        last_activity: entity.last_activity,\n        activity_count: entity.activity_count,\n        recent_actions: entity.recent_actions,\n        updated_at: new Date().toISOString(),\n        source: 'auto_audit_sync'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_point",
+      "name": "Store World Model",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/world_model/points"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "parameters": {
+        "jsCode": "return [{ json: { synced: 0, skipped: 'no recent audit events' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "world-model-sync",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "5e387b28-72fd-443b-aa64-e42806375b8b"
+    }
+  ],
+  "connections": {
+    "Build World Model Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store World Model",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 5AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Audit Log",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Entity": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build World Model Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Extract Entities": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Entities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Entities": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summary",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Entities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Entities": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Embed Entity",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Audit Log": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Extract Entities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Store World Model": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Entities",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Audit Log",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "684171b340e4d877",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: World Model Sync (Daily 5AM)"
+}

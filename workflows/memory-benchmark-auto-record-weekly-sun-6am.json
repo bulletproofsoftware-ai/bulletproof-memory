@@ -1,0 +1,223 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Sun 6AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 6 * * 0",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_audit",
+      "name": "Scroll Week Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":1000,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "compute_metrics",
+      "name": "Compute Weekly Metrics",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst points = response.result?.points || [];\nconst weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;\n\nlet totalOps = 0, errors = 0, stores = 0, recalls = 0;\nconst projects = new Set();\n\nfor (const p of points) {\n  const payload = p.payload || {};\n  const ts = new Date(payload.timestamp || 0).getTime();\n  if (ts < weekAgo) continue;\n  \n  totalOps++;\n  const action = payload.action || '';\n  if (payload.error) errors++;\n  if (action.includes('store') || action.includes('MEMORY_STORED')) stores++;\n  if (action.includes('recall') || action.includes('MEMORY_RECALLED')) recalls++;\n  if (payload.project) projects.add(payload.project);\n}\n\nconst errorRate = totalOps > 0 ? (errors / totalOps * 100).toFixed(2) : 0;\n\nreturn [{ json: {\n  week_ending: new Date().toISOString().split('T')[0],\n  total_operations: totalOps,\n  stores: stores,\n  recalls: recalls,\n  errors: errors,\n  error_rate_pct: parseFloat(errorRate),\n  active_projects: Array.from(projects),\n  project_count: projects.size\n}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "embed_benchmark",
+      "name": "Embed Benchmark",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'weekly benchmark ' + $json.week_ending + ' ops=' + $json.total_operations + ' errors=' + $json.errors + ' stores=' + $json.stores + ' recalls=' + $json.recalls}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build Benchmark Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst metrics = $('Compute Weekly Metrics').first().json;\nif (!embedding) return { json: { error: 'no embedding' } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        benchmark_type: 'weekly_system_health',\n        week_ending: metrics.week_ending,\n        metrics: {\n          total_operations: metrics.total_operations,\n          stores: metrics.stores,\n          recalls: metrics.recalls,\n          errors: metrics.errors,\n          error_rate_pct: metrics.error_rate_pct,\n          project_count: metrics.project_count\n        },\n        active_projects: metrics.active_projects,\n        created_at: new Date().toISOString(),\n        source: 'auto_weekly_benchmark'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        880,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_benchmark",
+      "name": "Store Benchmark",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/benchmarks/points"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "benchmark-record",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "e3df0a06-788e-478f-b189-525e8d9d1921"
+    }
+  ],
+  "connections": {
+    "Build Benchmark Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Benchmark",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Compute Weekly Metrics": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Benchmark",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Benchmark": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Benchmark Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Week Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compute Weekly Metrics",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Week Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Weekly Sun 6AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Week Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "37f56dcf8ec30e91",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Benchmark Auto-Record (Weekly Sun 6AM)"
+}

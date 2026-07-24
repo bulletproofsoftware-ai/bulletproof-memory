@@ -1,0 +1,150 @@
+{% extends "layout.html" %}
+{% set active = "analytics" %}
+{% block title %}Analytics — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Analytics</h2>
+    <span class="page-info" id="health-status">Loading...</span>
+</div>
+
+<!-- PRTM Stats -->
+<div class="card-grid" id="prtm-cards"></div>
+
+<!-- Pipeline Status -->
+<div style="margin-bottom: 24px;">
+    <h3 style="font-size: 14px; color: var(--text-muted); margin-bottom: 12px;">Memory Pipeline</h3>
+    <div class="card-grid" id="pipeline-cards"></div>
+</div>
+
+<!-- Core memory stats -->
+<div class="card-grid" id="core-cards"></div>
+
+<!-- Extended collection stats -->
+<div style="margin-bottom: 24px;">
+    <h3 style="font-size: 14px; color: var(--text-muted); margin-bottom: 12px;">Extended Collections</h3>
+    <div class="card-grid" id="extended-cards"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function createText(tag, text, className) {
+    var el = document.createElement(tag);
+    el.textContent = text || '';
+    if (className) el.className = className;
+    return el;
+}
+
+function makeCard(label, value, color) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.style.textAlign = 'center';
+    card.style.padding = '16px';
+
+    var val = document.createElement('div');
+    val.style.cssText = 'font-size:28px;font-weight:600;color:' + color;
+    val.textContent = (value || 0).toLocaleString();
+
+    var lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px';
+    lbl.textContent = label;
+
+    card.appendChild(val);
+    card.appendChild(lbl);
+    return card;
+}
+
+async function loadAnalytics() {
+    /* Health */
+    try {
+        var h = await fetch('/health');
+        var hd = await h.json();
+        var el = document.getElementById('health-status');
+        el.replaceChildren();
+        var qSpan = createText('span', 'Qdrant: ' + hd.qdrant);
+        qSpan.style.color = hd.qdrant === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(qSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var oSpan = createText('span', 'Ollama: ' + hd.ollama);
+        oSpan.style.color = hd.ollama === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(oSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var sSpan = createText('span', 'Decisions DB: ' + hd.decisions_db);
+        sSpan.style.color = hd.decisions_db === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(sSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var nSpan = createText('span', 'n8n: ' + (hd.n8n || 'unknown'));
+        nSpan.style.color = hd.n8n === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(nSpan);
+    } catch(e) {
+        document.getElementById('health-status').textContent = 'Error';
+    }
+
+    /* Stats */
+    try {
+        var s = await fetch('/api/stats');
+        var data = await s.json();
+        var counts = data.counts || {};
+
+        /* PRTM cards */
+        var prtmCards = document.getElementById('prtm-cards');
+        prtmCards.replaceChildren();
+        prtmCards.appendChild(makeCard('Meta-Memories', data.meta_count || 0, '#a855f7'));
+        prtmCards.appendChild(makeCard('Hot Tier', data.hot_count || 0, '#06b6d4'));
+        prtmCards.appendChild(makeCard('Stale (30d+)', data.stale_count || 0, '#f59e0b'));
+        var totalMem = counts.long_term || 0;
+        prtmCards.appendChild(makeCard('Total Memories', totalMem, '#3b82f6'));
+
+        /* Pipeline cards */
+        var pipeCards = document.getElementById('pipeline-cards');
+        pipeCards.replaceChildren();
+        var pipe = data.pipeline || {};
+        pipeCards.appendChild(makeCard('Unprocessed Transcripts', pipe.unprocessed || 0, pipe.unprocessed > 0 ? '#f59e0b' : '#22c55e'));
+        pipeCards.appendChild(makeCard('Processed Transcripts', pipe.processed || 0, '#3b82f6'));
+        pipeCards.appendChild(makeCard('Extraction Interval', '2h', '#06b6d4'));
+        pipeCards.appendChild(makeCard('Abstraction', 'Weekly', '#06b6d4'));
+
+        /* Core cards */
+        var coreCards = document.getElementById('core-cards');
+        coreCards.replaceChildren();
+        var coreData = [
+            { label: 'Memories', key: 'long_term', color: '#3b82f6' },
+            { label: 'Links', key: 'links', color: '#22c55e' },
+            { label: 'Learnings', key: 'learnings', color: '#f59e0b' },
+            { label: 'Procedures', key: 'procedures', color: '#a855f7' },
+            { label: 'Trajectories', key: 'trajectories', color: '#06b6d4' },
+            { label: 'Episodes', key: 'episodes', color: '#ec4899' },
+            { label: 'Heuristics', key: 'heuristics', color: '#f97316' },
+            { label: 'Audit Log', key: 'audit_log', color: '#64748b' },
+        ];
+        coreData.forEach(function(cd) {
+            coreCards.appendChild(makeCard(cd.label, counts[cd.key], cd.color));
+        });
+
+        /* Extended cards */
+        var extCards = document.getElementById('extended-cards');
+        extCards.replaceChildren();
+        var extData = [
+            { label: 'Benchmarks', key: 'benchmark_runs', color: '#8b5cf6' },
+            { label: 'Recordings', key: 'session_recordings', color: '#06b6d4' },
+            { label: 'Identities', key: 'agent_identities', color: '#22c55e' },
+            { label: 'NHI Lifecycle', key: 'nhi_lifecycle', color: '#f59e0b' },
+            { label: 'Monitor', key: 'constitutional_assessments', color: '#ef4444' },
+            { label: 'Causal Analysis', key: 'causal_analysis', color: '#3b82f6' },
+            { label: 'Consolidation', key: 'consolidation_cycles', color: '#ec4899' },
+            { label: 'Pheromone', key: 'pheromone_trails', color: '#a855f7' },
+            { label: 'World Model', key: 'world_model', color: '#64748b' },
+            { label: 'Sandboxes', key: 'sandbox_runs', color: '#f97316' },
+        ];
+        extData.forEach(function(cd) {
+            extCards.appendChild(makeCard(cd.label, counts[cd.key], cd.color));
+        });
+    } catch(e) {
+        console.error('Stats error:', e);
+    }
+}
+
+loadAnalytics();
+</script>
+{% endblock %}

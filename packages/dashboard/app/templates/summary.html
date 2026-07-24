@@ -1,0 +1,108 @@
+{% extends "layout.html" %}
+{% block title %}{{ page_title }} — Memory Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>{{ page_title }}</h2>
+    <span class="page-info" id="sub"></span>
+</div>
+<div class="card-grid" id="cards"></div>
+<div id="sections"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+var ENDPOINT = {{ api_endpoint | tojson }};
+
+function esc(s) { return (s == null ? '' : String(s)); }
+
+function summarize(payload) {
+    var keys = ['content', 'text', 'name', 'title', 'task_type', 'desc', 'description',
+                'outcome', 'metric', 'agent_id', 'knowledge_type', 'user_msg', 'relationship'];
+    for (var i = 0; i < keys.length; i++) {
+        if (payload[keys[i]]) return esc(payload[keys[i]]);
+    }
+    return JSON.stringify(payload);
+}
+
+function tsOf(payload) {
+    var keys = ['created_at', 'timestamp', 'indexed_at', 'last_updated', 'decided_at',
+                'last_accessed_at', 'tiered_at'];
+    for (var i = 0; i < keys.length; i++) {
+        if (payload[keys[i]]) return esc(payload[keys[i]]);
+    }
+    return '';
+}
+
+function renderCards(cards) {
+    var cg = document.getElementById('cards');
+    cg.replaceChildren();
+    (cards || []).forEach(function(c) {
+        var card = document.createElement('div');
+        card.className = 'card';
+        var l = document.createElement('div');
+        l.className = 'card-label';
+        l.textContent = c.label;
+        card.appendChild(l);
+        var v = document.createElement('div');
+        v.className = 'card-value' + (c.present && c.count > 0 ? ' primary' : '');
+        v.textContent = (c.count != null ? c.count.toLocaleString() : '0');
+        card.appendChild(v);
+        cg.appendChild(card);
+    });
+}
+
+function renderSections(sections) {
+    var sc = document.getElementById('sections');
+    sc.replaceChildren();
+    var shown = 0;
+    (sections || []).forEach(function(s) {
+        if (!s.recent || !s.recent.length) return;
+        shown++;
+        var box = document.createElement('div');
+        box.className = 'chart-container';
+        var title = document.createElement('h3');
+        title.textContent = s.label + ' · ' + (s.count != null ? s.count.toLocaleString() : 0);
+        box.appendChild(title);
+        var wrap = document.createElement('div');
+        wrap.className = 'table-wrap';
+        var t = document.createElement('table');
+        t.innerHTML = '<thead><tr><th style="width:160px">When</th><th>Summary</th></tr></thead>';
+        var tb = document.createElement('tbody');
+        s.recent.forEach(function(r) {
+            var p = r.payload || {};
+            var tr = document.createElement('tr');
+            var td1 = document.createElement('td');
+            td1.style.cssText = 'white-space:nowrap;color:var(--text-muted);font-size:12px';
+            td1.textContent = tsOf(p).slice(0, 19);
+            tr.appendChild(td1);
+            var td2 = document.createElement('td');
+            td2.textContent = summarize(p).slice(0, 240);
+            td2.title = JSON.stringify(p, null, 2);
+            tr.appendChild(td2);
+            tb.appendChild(tr);
+        });
+        t.appendChild(tb);
+        wrap.appendChild(t);
+        box.appendChild(wrap);
+        sc.appendChild(box);
+    });
+    if (!shown) {
+        var p = document.createElement('p');
+        p.style.color = 'var(--text-muted)';
+        p.textContent = 'No recent items to display.';
+        sc.appendChild(p);
+    }
+}
+
+async function load() {
+    try {
+        var d = await (await fetch(ENDPOINT)).json();
+        renderCards(d.cards);
+        renderSections(d.sections);
+        document.getElementById('sub').textContent = (d.cards || []).length + ' collections';
+    } catch (e) {
+        document.getElementById('sections').textContent = 'Error loading ' + ENDPOINT;
+    }
+}
+load();
+</script>
+{% endblock %}

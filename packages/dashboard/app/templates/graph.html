@@ -1,0 +1,460 @@
+{% extends "layout.html" %}
+{% set active = "graph" %}
+{% block title %}Knowledge Graph — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Knowledge Graph</h2>
+    <span class="page-info" id="graph-status">Loading...</span>
+</div>
+
+<div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;">
+    <div style="display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">
+        <button class="btn btn-ghost" id="view-project-btn" onclick="setView('project')" style="border-radius: 0; padding: 6px 14px;">Project</button>
+        <button class="btn btn-ghost" id="view-memory-btn" onclick="setView('memory')" style="border-radius: 0; padding: 6px 14px;">Memory</button>
+    </div>
+    <select class="input" id="filter-project" style="width: 200px;" onchange="filterGraph()">
+        <option value="">All projects</option>
+    </select>
+    <label style="font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;" id="min-size-wrap">
+        Min project size:
+        <input type="range" id="min-size" min="0" max="500" step="10" value="50" oninput="document.getElementById('min-size-val').textContent = this.value; filterGraph()">
+        <span id="min-size-val" style="min-width: 30px;">50</span>
+    </label>
+    <label style="font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;" id="include-global-wrap">
+        <input type="checkbox" id="include-global" onchange="filterGraph()"> Include global
+    </label>
+    <label style="font-size: 13px; color: var(--text-muted); display: none; align-items: center; gap: 6px;" id="min-strength-wrap">
+        Min strength:
+        <input type="range" id="min-strength" min="0.5" max="1.0" step="0.05" value="0.8" oninput="document.getElementById('strength-val').textContent = this.value; filterGraph()">
+        <span id="strength-val" style="min-width: 30px;">0.8</span>
+    </label>
+    <div style="display: flex; gap: 4px; margin-left: auto;">
+        <button class="btn btn-ghost" onclick="zoomIn()" title="Zoom in">+</button>
+        <button class="btn btn-ghost" onclick="zoomOut()" title="Zoom out">&minus;</button>
+        <button class="btn btn-ghost" onclick="zoomFit()" title="Fit to view">Fit</button>
+        <button class="btn btn-ghost" onclick="zoomReset()" title="Reset zoom">Reset</button>
+    </div>
+</div>
+
+<div style="display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted);">
+    <span>Scroll: pan | Ctrl+scroll / pinch: zoom | Drag node: reposition | Click node: details</span>
+    <span style="margin-left: auto; display: flex; gap: 12px;" id="legend"></span>
+</div>
+
+<div id="graph-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; position: relative; height: 700px; overflow: hidden;">
+    <svg id="graph-svg" width="100%" height="100%"></svg>
+    <div id="tooltip" style="position:absolute;display:none;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;max-width:300px;pointer-events:none;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+</div>
+
+<div id="node-detail" class="card" style="display: none; margin-top: 16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h3 id="detail-title" style="font-size: 14px;"></h3>
+        <button class="btn btn-ghost" onclick="document.getElementById('node-detail').style.display='none'" style="padding:4px 8px;font-size:12px;">Close</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;" id="detail-tags"></div>
+    <pre id="detail-content" style="background: var(--bg); padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto;"></pre>
+    <div id="detail-connections" style="margin-top:8px;font-size:12px;color:var(--text-muted);"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+var graphData = null;
+var currentView = 'project';
+var currentZoom = null;
+var zoomBehavior = null;
+var currentSimulation = null;
+
+var TYPE_COLORS = {
+    preference: '#3b82f6', fact: '#22c55e', context: '#f59e0b',
+    decision: '#ef4444', unknown: '#64748b', project: '#8b5cf6'
+};
+
+var MEMORY_LEGEND = [
+    { color: '#3b82f6', label: 'preference' },
+    { color: '#22c55e', label: 'fact' },
+    { color: '#f59e0b', label: 'context' },
+    { color: '#ef4444', label: 'decision' }
+];
+
+function renderLegend() {
+    var legend = document.getElementById('legend');
+    legend.replaceChildren();
+    if (currentView === 'project') {
+        var s = document.createElement('span');
+        s.textContent = 'Node size = memory count · edge thickness = cross-project link count';
+        legend.appendChild(s);
+    } else {
+        MEMORY_LEGEND.forEach(function(item) {
+            var span = document.createElement('span');
+            var dot = document.createElement('span');
+            dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;background:' + item.color + ';vertical-align:middle;margin-right:4px;';
+            span.appendChild(dot);
+            span.appendChild(document.createTextNode(item.label));
+            legend.appendChild(span);
+        });
+    }
+}
+
+function setView(view) {
+    if (view === currentView) return;
+    currentView = view;
+    document.getElementById('view-project-btn').classList.toggle('active', view === 'project');
+    document.getElementById('view-memory-btn').classList.toggle('active', view === 'memory');
+    document.getElementById('min-size-wrap').style.display = view === 'project' ? 'flex' : 'none';
+    document.getElementById('include-global-wrap').style.display = view === 'project' ? 'flex' : 'none';
+    document.getElementById('min-strength-wrap').style.display = view === 'memory' ? 'flex' : 'none';
+    renderLegend();
+    loadGraph();
+}
+
+function zoomIn() { d3.select('#graph-svg').transition().duration(300).call(zoomBehavior.scaleBy, 1.5); }
+function zoomOut() { d3.select('#graph-svg').transition().duration(300).call(zoomBehavior.scaleBy, 0.67); }
+function zoomReset() { d3.select('#graph-svg').transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity); }
+function zoomFit() {
+    var svg = d3.select('#graph-svg');
+    var g = svg.select('g');
+    var nodes = g.selectAll('.nodes circle');
+    if (!nodes.size()) return;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    nodes.each(function() {
+        var cx = parseFloat(this.getAttribute('cx')) || 0;
+        var cy = parseFloat(this.getAttribute('cy')) || 0;
+        var r = parseFloat(this.getAttribute('r')) || 0;
+        if (cx - r < minX) minX = cx - r;
+        if (cx + r > maxX) maxX = cx + r;
+        if (cy - r < minY) minY = cy - r;
+        if (cy + r > maxY) maxY = cy + r;
+    });
+    var bw = maxX - minX, bh = maxY - minY;
+    if (bw === 0 || bh === 0) return;
+    var pad = 60;
+    minX -= pad; minY -= pad; bw += pad * 2; bh += pad * 2;
+    var c = document.getElementById('graph-container');
+    var midX = minX + bw / 2, midY = minY + bh / 2;
+    var scale = Math.min(c.clientWidth / bw, c.clientHeight / bh);
+    scale = Math.max(0.15, Math.min(scale, 3));
+    svg.transition().duration(500).call(
+        zoomBehavior.transform,
+        d3.zoomIdentity.translate(c.clientWidth / 2 - midX * scale, c.clientHeight / 2 - midY * scale).scale(scale)
+    );
+}
+
+function createTooltipContent(d) {
+    var container = document.createElement('div');
+    var header = document.createElement('div');
+    header.style.cssText = 'color:var(--text);font-weight:600;margin-bottom:4px;';
+    if (currentView === 'project') {
+        header.textContent = d.project;
+        var body = document.createElement('div');
+        body.style.color = 'var(--text-muted)';
+        body.textContent = (d.memory_count || 0) + ' memories · ' + (d.internal_links || 0) + ' internal links';
+        container.appendChild(header);
+        container.appendChild(body);
+    } else {
+        header.textContent = '[' + (d.type || 'unknown') + '] ' + (d.project || 'global');
+        var body = document.createElement('div');
+        body.style.color = 'var(--text-muted)';
+        body.textContent = d.content ? d.content.slice(0, 120) : '(no content)';
+        container.appendChild(header);
+        container.appendChild(body);
+        if (d.dup_count > 1) {
+            var dup = document.createElement('div');
+            dup.style.cssText = 'color:var(--text-muted);margin-top:4px;font-style:italic;';
+            dup.textContent = d.dup_count + ' identical copies in store';
+            container.appendChild(dup);
+        }
+    }
+    return container;
+}
+
+async function loadGraph() {
+    var statusEl = document.getElementById('graph-status');
+    statusEl.textContent = 'Loading...';
+    try {
+        var url = '/api/graph-data?view=' + currentView;
+        if (currentView === 'memory') {
+            var ms = document.getElementById('min-strength').value;
+            url += '&min_strength=' + ms;
+        }
+        var resp = await fetch(url);
+        graphData = await resp.json();
+
+        if (!graphData.edges || graphData.edges.length === 0) {
+            statusEl.textContent = '0 nodes, 0 edges';
+            var msg = document.createElement('div');
+            msg.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px';
+            msg.textContent = currentView === 'project'
+                ? 'No cross-project links found. Try lowering Min strength via Memory view.'
+                : 'No links yet. Run the backfill script to populate the knowledge graph.';
+            document.getElementById('graph-container').replaceChildren(msg);
+            return;
+        }
+
+        // Populate project filter
+        var projects = new Set();
+        graphData.nodes.forEach(function(n) { if (n.project) projects.add(n.project); });
+        var sel = document.getElementById('filter-project');
+        sel.replaceChildren();
+        var allOpt = document.createElement('option');
+        allOpt.value = ''; allOpt.textContent = 'All projects';
+        sel.appendChild(allOpt);
+        Array.from(projects).sort().forEach(function(p) {
+            var opt = document.createElement('option');
+            opt.value = p; opt.textContent = p;
+            sel.appendChild(opt);
+        });
+
+        initZoom();
+        filterGraph();
+    } catch(e) {
+        statusEl.textContent = 'Error loading graph: ' + e.message;
+    }
+}
+
+function initZoom() {
+    var svg = d3.select('#graph-svg');
+    zoomBehavior = d3.zoom()
+        .scaleExtent([0.1, 8])
+        .filter(function(event) {
+            if (event.type === 'wheel') return event.ctrlKey || event.metaKey;
+            if (event.type === 'dblclick') return false;
+            return true;
+        })
+        .on('zoom', function(event) {
+            currentZoom = event.transform;
+            svg.select('g').attr('transform', event.transform);
+            var labels = svg.selectAll('.labels text');
+            if (labels.size()) {
+                var k = event.transform.k;
+                var fontSize = Math.min(16, Math.max(8, 12 / Math.max(k, 0.5)));
+                labels.attr('font-size', fontSize);
+            }
+        });
+    svg.call(zoomBehavior);
+    document.getElementById('graph-container').addEventListener('wheel', function(e) {
+        if (e.ctrlKey || e.metaKey) e.preventDefault();
+    }, { passive: false });
+}
+
+function filterGraph() {
+    if (!graphData) return;
+    var projFilter = document.getElementById('filter-project').value;
+
+    var nodes, edges;
+    if (currentView === 'project') {
+        var minSize = parseInt(document.getElementById('min-size').value, 10) || 0;
+        var includeGlobal = document.getElementById('include-global').checked;
+        var visibleProjects = new Set();
+        nodes = graphData.nodes
+            .filter(function(n) {
+                if (!includeGlobal && n.project === 'global') return false;
+                if ((n.memory_count || 0) < minSize) return false;
+                if (projFilter && n.project !== projFilter) return false;
+                return true;
+            })
+            .map(function(n) {
+                visibleProjects.add(n.id);
+                return { id: n.id, project: n.project, type: 'project', memory_count: n.memory_count, internal_links: n.internal_links, content: n.content };
+            });
+        edges = graphData.edges
+            .filter(function(e) {
+                var s = e.source.id || e.source;
+                var t = e.target.id || e.target;
+                return visibleProjects.has(s) && visibleProjects.has(t);
+            })
+            .map(function(e) {
+                return { source: e.source.id || e.source, target: e.target.id || e.target, relationship: e.relationship, strength: e.strength, count: e.count };
+            });
+    } else {
+        var minStr = parseFloat(document.getElementById('min-strength').value);
+        edges = graphData.edges
+            .filter(function(e) { return e.strength >= minStr; })
+            .map(function(e) { return { source: e.source.id || e.source, target: e.target.id || e.target, relationship: e.relationship, strength: e.strength }; });
+        var usedIds = new Set();
+        edges.forEach(function(e) { usedIds.add(e.source); usedIds.add(e.target); });
+        nodes = graphData.nodes
+            .filter(function(n) {
+                if (!usedIds.has(n.id)) return false;
+                if (projFilter && n.project !== projFilter) return false;
+                return true;
+            })
+            .map(function(n) { return { id: n.id, type: n.type, project: n.project, content: n.content, tags: n.tags, dup_count: n.dup_count }; });
+        if (projFilter) {
+            var visIds = new Set(nodes.map(function(n) { return n.id; }));
+            edges = edges.filter(function(e) { return visIds.has(e.source) && visIds.has(e.target); });
+        }
+    }
+
+    document.getElementById('graph-status').textContent = nodes.length + ' nodes, ' + edges.length + ' edges';
+    renderGraph({ nodes: nodes, edges: edges });
+}
+
+function renderGraph(data) {
+    if (currentSimulation) { currentSimulation.stop(); currentSimulation = null; }
+
+    var container = document.getElementById('graph-container');
+    var width = container.clientWidth;
+    var height = container.clientHeight;
+
+    var svg = d3.select('#graph-svg');
+    svg.selectAll('g').remove();
+    var g = svg.append('g');
+    if (currentZoom) g.attr('transform', currentZoom);
+
+    var isProjectView = currentView === 'project';
+    var nodeCount = data.nodes.length;
+
+    // Node sizing
+    var maxCount = 1;
+    if (isProjectView) {
+        data.nodes.forEach(function(n) { if ((n.memory_count || 0) > maxCount) maxCount = n.memory_count; });
+    }
+    function nodeRadius(d) {
+        if (!isProjectView) {
+            return nodeCount > 300 ? 6 : nodeCount > 100 ? 7 : 8;
+        }
+        var ratio = (d.memory_count || 1) / maxCount;
+        return 14 + Math.sqrt(ratio) * 36;  // 14..50px
+    }
+
+    // Edge sizing
+    var maxEdgeCount = 1;
+    if (isProjectView) {
+        data.edges.forEach(function(e) { if ((e.count || 0) > maxEdgeCount) maxEdgeCount = e.count; });
+    }
+    function edgeWidth(d) {
+        if (!isProjectView) return 0.5 + (d.strength || 0) * 1.5;
+        var ratio = (d.count || 1) / maxEdgeCount;
+        return 1 + Math.sqrt(ratio) * 7;
+    }
+    function edgeOpacity(d) {
+        if (!isProjectView) return 0.2 + (d.strength || 0) * 0.4;
+        var ratio = (d.count || 1) / maxEdgeCount;
+        return 0.25 + Math.sqrt(ratio) * 0.55;
+    }
+
+    var chargeStrength = isProjectView
+        ? (nodeCount > 30 ? -800 : -1200)
+        : (nodeCount > 300 ? -120 : nodeCount > 100 ? -180 : -200);
+    var linkDistance = isProjectView
+        ? (nodeCount > 30 ? 140 : 180)
+        : (nodeCount > 300 ? 80 : nodeCount > 100 ? 90 : 80);
+    var collisionPad = isProjectView ? 12 : 8;
+
+    var simulation = d3.forceSimulation(data.nodes)
+        .force('link', d3.forceLink(data.edges).id(function(d) { return d.id; }).distance(linkDistance).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(chargeStrength).distanceMax(isProjectView ? 800 : 400))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(function(d) { return nodeRadius(d) + collisionPad; }))
+        .force('x', d3.forceX(width / 2).strength(0.04))
+        .force('y', d3.forceY(height / 2).strength(0.04))
+        .alphaDecay(0.025)
+        .velocityDecay(0.4);
+    currentSimulation = simulation;
+
+    var link = g.append('g').attr('class', 'links').selectAll('line').data(data.edges).join('line')
+        .attr('stroke', isProjectView ? '#8b5cf6' : '#64748b')
+        .attr('stroke-opacity', edgeOpacity)
+        .attr('stroke-width', edgeWidth);
+
+    var tooltipEl = document.getElementById('tooltip');
+
+    var node = g.append('g').attr('class', 'nodes').selectAll('circle').data(data.nodes).join('circle')
+        .attr('r', nodeRadius)
+        .attr('fill', function(d) { return TYPE_COLORS[d.type] || TYPE_COLORS.unknown; })
+        .attr('stroke', 'var(--surface)').attr('stroke-width', 2)
+        .style('cursor', 'pointer')
+        .call(d3.drag()
+            .on('start', function(ev, d) { if (!ev.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', function(ev, d) { d.fx = ev.x; d.fy = ev.y; })
+            .on('end', function(ev, d) { if (!ev.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        )
+        .on('mouseenter', function(ev, d) {
+            tooltipEl.replaceChildren(createTooltipContent(d));
+            tooltipEl.style.display = 'block';
+        })
+        .on('mousemove', function(ev) {
+            var rect = container.getBoundingClientRect();
+            tooltipEl.style.left = (ev.clientX - rect.left + 14) + 'px';
+            tooltipEl.style.top = (ev.clientY - rect.top - 10) + 'px';
+        })
+        .on('mouseleave', function() { tooltipEl.style.display = 'none'; })
+        .on('click', function(ev, d) {
+            ev.stopPropagation();
+            link.attr('stroke-opacity', function(l) {
+                var src = l.source.id || l.source, tgt = l.target.id || l.target;
+                return (src === d.id || tgt === d.id) ? 0.95 : 0.08;
+            }).attr('stroke-width', function(l) {
+                var src = l.source.id || l.source, tgt = l.target.id || l.target;
+                return (src === d.id || tgt === d.id) ? edgeWidth(l) * 1.6 : edgeWidth(l) * 0.4;
+            });
+            node.attr('opacity', function(n) {
+                if (n.id === d.id) return 1;
+                var connected = data.edges.some(function(e) {
+                    var src = e.source.id || e.source, tgt = e.target.id || e.target;
+                    return (src === d.id && tgt === n.id) || (tgt === d.id && src === n.id);
+                });
+                return connected ? 1 : 0.15;
+            });
+            document.getElementById('node-detail').style.display = 'block';
+            if (isProjectView) {
+                document.getElementById('detail-title').textContent = d.project;
+            } else {
+                document.getElementById('detail-title').textContent = '[' + (d.type || 'unknown') + '] ' + (d.project || 'global');
+            }
+            document.getElementById('detail-content').textContent = d.content || '(no content)';
+            document.getElementById('detail-tags').replaceChildren();
+            var conns = data.edges.filter(function(e) {
+                return (e.source.id || e.source) === d.id || (e.target.id || e.target) === d.id;
+            });
+            var label = isProjectView
+                ? (conns.length + ' connected project(s)')
+                : (conns.length + ' connection(s)');
+            document.getElementById('detail-connections').textContent = label;
+        });
+
+    // Labels: always render in project view, also in memory view (zoom adjusts size)
+    function labelText(d) {
+        if (isProjectView) return d.project;
+        if (!d.content) return String(d.id).slice(0, 8);
+        var text = d.content.replace(/^(User prefers|Marc |Remember |Note: |The )/i, '');
+        var label = text.slice(0, 30) + (text.length > 30 ? '...' : '');
+        return d.dup_count > 1 ? label + ' ×' + d.dup_count : label;
+    }
+    g.append('g').attr('class', 'labels').selectAll('text').data(data.nodes).join('text')
+        .text(labelText)
+        .attr('font-size', isProjectView ? 13 : 10)
+        .attr('font-weight', isProjectView ? 600 : 400)
+        .attr('fill', 'var(--text)').attr('fill-opacity', 0.95)
+        .attr('text-anchor', isProjectView ? 'middle' : 'start')
+        .attr('dx', isProjectView ? 0 : function(d) { return nodeRadius(d) + 4; })
+        .attr('dy', isProjectView ? function(d) { return nodeRadius(d) + 14; } : 4)
+        .style('pointer-events', 'none');
+
+    svg.on('click', function() {
+        link.attr('stroke-opacity', edgeOpacity).attr('stroke-width', edgeWidth);
+        node.attr('opacity', 1);
+    });
+
+    simulation.on('tick', function() {
+        link.attr('x1', function(d) { return d.source.x; }).attr('y1', function(d) { return d.source.y; })
+            .attr('x2', function(d) { return d.target.x; }).attr('y2', function(d) { return d.target.y; });
+        node.attr('cx', function(d) { return d.x; }).attr('cy', function(d) { return d.y; });
+        g.selectAll('.labels text').attr('x', function(d) { return d.x; }).attr('y', function(d) { return d.y; });
+    });
+
+    setTimeout(function() {
+        currentZoom = null;
+        zoomFit();
+    }, isProjectView ? 1500 : 2000);
+}
+
+// Mark project view as active by default
+document.getElementById('view-project-btn').classList.add('active');
+renderLegend();
+loadGraph();
+</script>
+{% endblock %}

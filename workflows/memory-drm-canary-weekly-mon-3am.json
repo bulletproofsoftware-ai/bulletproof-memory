@@ -1,0 +1,157 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Mon 3AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 3 * * 1",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "load_pairs",
+      "name": "Load Canary Pairs",
+      "parameters": {
+        "jsCode": "// In-workflow constant \u2014 for production, load from /scripts/migrations/stage-10/canary-pairs.json via filesystem read if n8n's executeWorkflow context allows.\n// For now we inline the pairs (kept short for workflow visibility).\nconst CASES = [\n  { id: 'drm-001', query: 'infrastructure SSH alias hg', expected_top_substr: 'hg' },\n  { id: 'drm-002', query: 'Qdrant vector dimensions', expected_top_substr: '768' },\n  { id: 'drm-003', query: 'claude-memory-postgres container port', expected_top_substr: '5438' },\n  { id: 'drm-004', query: 'n8n claude-memory gateway endpoint', expected_top_substr: '5679' },\n  { id: 'drm-005', query: 'Stage 8 dual-write feature flag', expected_top_substr: 'STAGE_8_DUAL_WRITE' },\n  { id: 'drm-006', query: 'frontend designer agent purpose', expected_top_substr: 'frontend-designer' },\n  { id: 'drm-007', query: 'memory_recall hot tier threshold', expected_top_substr: 'hot' },\n  { id: 'drm-008', query: 'Memgraph bolt port', expected_top_substr: '7687' },\n  { id: 'drm-009', query: 'BRD-tracker workflow gates', expected_top_substr: 'gate' },\n  { id: 'drm-010', query: 'Marc conductor process steps mandatory', expected_top_substr: 'process' },\n];\nconst runId = `drm-${new Date().toISOString().slice(0,10)}-${Math.floor(Math.random()*10000)}`;\nreturn CASES.map(c => ({ json: { ...c, canary_run_id: runId } }));"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "run_cases",
+      "name": "Run Canary Cases",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({ tool: 'memory_recall', args: { query: $json.query, limit: 3, include_all_projects: true } }) }}",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        },
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://n8n:5678/claude-memory-gateway"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "compute_rates",
+      "name": "Compute Rates",
+      "parameters": {
+        "jsCode": "// Score each case. Hit = top result content contains expected substring (case-insensitive).\nconst caseInputs = $('Load Canary Pairs').all().map(i => i.json);\nconst recallResults = $input.all().map(i => i.json);\nlet hits = 0, lure_fa = 0, unrelated_fa = 0, total = caseInputs.length;\nconst rows = [];\nfor (let i = 0; i < caseInputs.length; i++) {\n  const c = caseInputs[i];\n  const r = recallResults[i] || {};\n  const memories = (r.memories || r.results || []);\n  const top = memories[0] || {};\n  const topContent = String(top.payload?.content || top.content || '').toLowerCase();\n  const expectedHit = topContent.includes(String(c.expected_top_substr).toLowerCase());\n  if (expectedHit) hits++;\n  rows.push({\n    canary_run_id: c.canary_run_id,\n    query: c.query,\n    expected_top_id: null,\n    actual_top_id: String(top.id || ''),\n    lure_returned: false,\n    unrelated_returned: false,\n    case_count: total,\n  });\n}\nconst hit_rate = total > 0 ? hits/total : 0;\nconst lure_fa_rate = total > 0 ? lure_fa/total : 0;\nconst unrelated_fa_rate = total > 0 ? unrelated_fa/total : 0;\n// Annotate every row with the aggregate rates.\nreturn rows.map(r => ({ json: { ...r, hit_rate, lure_fa_rate, unrelated_fa_rate } }));"
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "insert_health",
+      "name": "Insert memory_health Row",
+      "parameters": {
+        "host": "postgres",
+        "port": 5432,
+        "database": "claude_memory",
+        "schema": "audit",
+        "table": "memory_health",
+        "columns": "canary_run_id,query,expected_top_id,actual_top_id,lure_returned,unrelated_returned,case_count,hit_rate,lure_fa_rate,unrelated_fa_rate",
+        "values": "={{ $json.canary_run_id }},={{ $json.query }},={{ $json.expected_top_id }},={{ $json.actual_top_id }},={{ $json.lure_returned }},={{ $json.unrelated_returned }},={{ $json.case_count }},={{ $json.hit_rate }},={{ $json.lure_fa_rate }},={{ $json.unrelated_fa_rate }}"
+      },
+      "position": [
+        880,
+        300
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "notes": "Connect to claude-memory-postgres via postgres:5432. Credentials configured at workflow level via n8n credentials store (not embedded in JSON)."
+    }
+  ],
+  "connections": {
+    "Weekly Mon 3AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Load Canary Pairs",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Load Canary Pairs": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Run Canary Cases",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Run Canary Cases": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compute Rates",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Compute Rates": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Insert memory_health Row",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "f03bfd9e1707e914",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "memory-drm-canary-weekly-mon-3am"
+}

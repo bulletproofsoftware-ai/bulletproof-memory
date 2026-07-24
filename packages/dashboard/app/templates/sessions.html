@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+{% set active = "sessions" %}
+{% block title %}Sessions — Memory Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>Sessions</h2>
+    <span class="page-info" id="sub"></span>
+</div>
+<div class="card-grid" id="cards"></div>
+<div class="chart-container">
+    <h3>Session Transcripts (claude-memory-postgres)</h3>
+    <div class="table-wrap"><table id="tx"><thead></thead><tbody></tbody></table></div>
+</div>
+<div id="sections"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+function esc(s) { return (s == null ? '' : String(s)); }
+function summarize(p) {
+    var keys = ['user_msg', 'assistant_msg', 'content', 'text', 'title', 'name'];
+    for (var i = 0; i < keys.length; i++) { if (p[keys[i]]) return esc(p[keys[i]]); }
+    return JSON.stringify(p);
+}
+function tsOf(p) {
+    var keys = ['timestamp', 'created_at', 'indexed_at'];
+    for (var i = 0; i < keys.length; i++) { if (p[keys[i]]) return esc(p[keys[i]]); }
+    return '';
+}
+
+async function load() {
+    try {
+        var d = await (await fetch('/api/sessions')).json();
+
+        var cg = document.getElementById('cards');
+        cg.replaceChildren();
+        var cards = (d.cards || []).slice();
+        if (d.transcripts) cards.push({ label: 'Session Transcripts', count: d.transcripts.count, present: d.transcripts.available });
+        cards.forEach(function(c) {
+            var card = document.createElement('div'); card.className = 'card';
+            var l = document.createElement('div'); l.className = 'card-label'; l.textContent = c.label; card.appendChild(l);
+            var v = document.createElement('div'); v.className = 'card-value' + (c.count > 0 ? ' primary' : '');
+            v.textContent = (c.count != null ? c.count.toLocaleString() : '0'); card.appendChild(v);
+            cg.appendChild(card);
+        });
+
+        // transcripts table
+        var tx = d.transcripts || { recent: [] };
+        var rows = tx.recent || [];
+        var thead = document.querySelector('#tx thead');
+        var tbody = document.querySelector('#tx tbody');
+        var cols = rows.length ? Object.keys(rows[0]).slice(0, 6) : [];
+        thead.innerHTML = '<tr>' + cols.map(function(c) { return '<th>' + c + '</th>'; }).join('') + '</tr>';
+        tbody.innerHTML = rows.length
+            ? rows.map(function(r) { return '<tr>' + cols.map(function(c) { return '<td>' + esc(r[c]).slice(0, 120) + '</td>'; }).join('') + '</tr>'; }).join('')
+            : '<tr><td>' + (tx.available ? 'No transcripts' : 'claude-memory-postgres unavailable') + '</td></tr>';
+
+        // qdrant session sections
+        var sc = document.getElementById('sections');
+        sc.replaceChildren();
+        (d.sections || []).forEach(function(s) {
+            if (!s.recent || !s.recent.length) return;
+            var box = document.createElement('div'); box.className = 'chart-container';
+            var h = document.createElement('h3'); h.textContent = s.label + ' · ' + (s.count || 0).toLocaleString(); box.appendChild(h);
+            var wrap = document.createElement('div'); wrap.className = 'table-wrap';
+            var t = document.createElement('table');
+            t.innerHTML = '<thead><tr><th style="width:160px">When</th><th>Summary</th></tr></thead>';
+            var tb = document.createElement('tbody');
+            s.recent.forEach(function(r) {
+                var p = r.payload || {};
+                var tr = document.createElement('tr');
+                var c1 = document.createElement('td'); c1.style.cssText = 'white-space:nowrap;color:var(--text-muted);font-size:12px'; c1.textContent = tsOf(p).slice(0, 19); tr.appendChild(c1);
+                var c2 = document.createElement('td'); c2.textContent = summarize(p).slice(0, 240); c2.title = JSON.stringify(p, null, 2); tr.appendChild(c2);
+                tb.appendChild(tr);
+            });
+            t.appendChild(tb); wrap.appendChild(t); box.appendChild(wrap); sc.appendChild(box);
+        });
+
+        document.getElementById('sub').textContent = (d.cards || []).length + ' session stores';
+    } catch (e) {
+        document.getElementById('sections').textContent = 'Error loading sessions';
+    }
+}
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 3 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code",
+      "name": "Consolidation Cycle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst OLLAMA_URL = 'http://ollama:11434';\n\nasync function qdrantScroll(collection, filter, limit=100) {\n  const body = {limit, with_payload: true, with_vector: false};\n  if (filter) body.filter = filter;\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify(body), url: `${QDRANT_URL}/collections/${collection}/points/scroll`, json: true });\n  return d.result?.points || [];\n}\n\nasync function qdrantStore(collection, id, vector, payload) {\n  await helpers.httpRequest({ \n    method: 'PUT', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: [{id, vector, payload}]}), url: `${QDRANT_URL}/collections/${collection}/points` })\n}\n\nasync function qdrantUpdate(collection, ids, payload) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({payload, points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/payload` });\n}\n\nasync function qdrantDelete(collection, ids) {\n  await helpers.httpRequest({ method: 'POST', headers: {'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json'},\n    body: JSON.stringify({points: ids}), url: `${QDRANT_URL}/collections/${collection}/points/delete` });\n}\n\nasync function embed(text) {\n  const d = await helpers.httpRequest({ method: 'POST', headers: {'Content-Type': 'application/json'},\n    body: JSON.stringify({model: 'nomic-embed-text', input: text}), url: `${OLLAMA_URL}/api/embed`, json: true });\n  return d.embeddings?.[0] || null;\n}\n\nfunction uuid() { return ((function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});})()); }\n\n// Phase 1: Replay \u2014 scan recent episodes\nconst episodes = await qdrantScroll('episodes', null, 50);\nconst now = Date.now();\nconst recentEpisodes = episodes.filter(e => {\n  const created = new Date(e.payload?.created_at || 0).getTime();\n  return (now - created) < 48 * 60 * 60 * 1000; // last 48h\n});\n\n// Phase 2: Tier transfer\nconst hotMemories = await qdrantScroll('memories_hot', null, 100);\nconst transferredToWarm = [];\nconst pruned = [];\n\nfor (const m of hotMemories) {\n  const created = new Date(m.payload?.created_at || 0).getTime();\n  const ageHours = (now - created) / (60 * 60 * 1000);\n  const recallCount = m.payload?.recall_count || 0;\n\n  if (ageHours >= 24 && recallCount >= 2) {\n    // hot -> warm\n    const vec = await embed(m.payload?.content || '');\n    if (vec) {\n      await qdrantStore('memories_warm', m.id, vec, {...m.payload, tier: 'warm', promoted_at: new Date().toISOString()});\n      transferredToWarm.push(m.id);\n    }\n  } else if (ageHours >= 48 && recallCount === 0) {\n    // hot -> pruned (never recalled)\n    const vec = await embed(m.payload?.content || '');\n    if (vec) {\n      await qdrantStore('memories_cold', m.id, vec, {...m.payload, tier: 'cold', pruned_at: new Date().toISOString(), prune_reason: 'never_recalled_48h'});\n      pruned.push(m.id);\n    }\n  }\n}\n\n// Complete the move: remove transferred points from hot tier\nconst movedFromHot = [...transferredToWarm, ...pruned];\nif (movedFromHot.length) await qdrantDelete('memories_hot', movedFromHot);\n\n// Phase 3: Log consolidation cycle\nconst cycleId = uuid();\nconst cycleVec = await embed('consolidation cycle ' + new Date().toISOString());\nif (cycleVec) {\n  await qdrantStore('consolidation_cycles', cycleId, cycleVec, {\n    cycle_id: cycleId, timestamp: new Date().toISOString(),\n    episodes_reviewed: recentEpisodes.length,\n    transferred_to_warm: transferredToWarm.length,\n    pruned: pruned.length,\n    status: 'completed'\n  });\n}\n\nreturn [{json: {episodes: recentEpisodes.length, transferred: transferredToWarm.length, pruned: pruned.length}}];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Consolidation Cycle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "02c24ab9e3d4402d",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Hippocampal Consolidation"
+}

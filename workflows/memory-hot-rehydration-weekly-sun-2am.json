@@ -1,0 +1,362 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Sun 2AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 2 * * 0",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_warm",
+      "name": "Scroll Warm by Recall Count",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_warm/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "top_n_warm",
+      "name": "Take Top N Warm",
+      "parameters": {
+        "jsCode": "// Sort points by access_count desc (fallback recall_count desc), take top 20, emit one item per point\nconst N_WARM = 20;\nconst body = $input.first().json;\nconst points = (body.result && body.result.points) || [];\nconst sorted = points.slice().sort((a, b) => {\n  const ac = (a.payload && (a.payload.access_count || a.payload.recall_count)) || 0;\n  const bc = (b.payload && (b.payload.access_count || b.payload.recall_count)) || 0;\n  return bc - ac;\n});\nconst top = sorted.slice(0, N_WARM);\nreturn top.map(p => ({ json: { id: p.id, payload: p.payload } }));"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "get_warm_full",
+      "name": "Get Warm Point Full",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"ids\":[\"={{ $json.id }}\"],\"with_payload\":true,\"with_vector\":true}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_warm/points"
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "mark_hot_warm",
+      "name": "Mark as Hot (Warm Source)",
+      "parameters": {
+        "jsCode": "// For each retrieved Warm point, build a Hot upsert request body with rehydration metadata.\nconst now = new Date().toISOString();\nconst body = $input.first().json;\nconst points = (body.result || []).map(p => ({\n  id: p.id,\n  vector: p.vector,\n  payload: { ...p.payload, tier: 'hot', rehydrated_from: 'warm', rehydrated_at: now }\n}));\nif (points.length === 0) return [{ json: { upsertBody: { points: [] } } }];\nreturn [{ json: { upsertBody: { points } } }];"
+      },
+      "position": [
+        880,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "upsert_hot_warm",
+      "name": "Upsert into Hot (Warm Source)",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify($json.upsertBody) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_hot/points"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "scroll_cold",
+      "name": "Scroll Cold by Recall Count",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_cold/points/scroll"
+      },
+      "position": [
+        220,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "top_n_cold",
+      "name": "Take Top N Cold",
+      "parameters": {
+        "jsCode": "const N_COLD = 10;\nconst body = $input.first().json;\nconst points = (body.result && body.result.points) || [];\nconst sorted = points.slice().sort((a, b) => {\n  const ac = (a.payload && (a.payload.access_count || a.payload.recall_count)) || 0;\n  const bc = (b.payload && (b.payload.access_count || b.payload.recall_count)) || 0;\n  return bc - ac;\n});\nconst top = sorted.slice(0, N_COLD);\nreturn top.map(p => ({ json: { id: p.id, payload: p.payload } }));"
+      },
+      "position": [
+        440,
+        500
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "get_cold_full",
+      "name": "Get Cold Point Full",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"ids\":[\"={{ $json.id }}\"],\"with_payload\":true,\"with_vector\":true}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_cold/points"
+      },
+      "position": [
+        660,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "mark_hot_cold",
+      "name": "Mark as Hot (Cold Source)",
+      "parameters": {
+        "jsCode": "const now = new Date().toISOString();\nconst body = $input.first().json;\nconst points = (body.result || []).map(p => ({\n  id: p.id,\n  vector: p.vector,\n  payload: { ...p.payload, tier: 'hot', rehydrated_from: 'cold', rehydrated_at: now }\n}));\nif (points.length === 0) return [{ json: { upsertBody: { points: [] } } }];\nreturn [{ json: { upsertBody: { points } } }];"
+      },
+      "position": [
+        880,
+        500
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "upsert_hot_cold",
+      "name": "Upsert into Hot (Cold Source)",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify($json.upsertBody) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "http://qdrant:6333/collections/memories_hot/points"
+      },
+      "position": [
+        1100,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Weekly Sun 2AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Warm by Recall Count",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Warm by Recall Count": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Take Top N Warm",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Take Top N Warm": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Get Warm Point Full",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Get Warm Point Full": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Mark as Hot (Warm Source)",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mark as Hot (Warm Source)": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Upsert into Hot (Warm Source)",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Upsert into Hot (Warm Source)": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Cold by Recall Count",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Cold by Recall Count": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Take Top N Cold",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Take Top N Cold": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Get Cold Point Full",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Get Cold Point Full": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Mark as Hot (Cold Source)",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mark as Hot (Cold Source)": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Upsert into Hot (Cold Source)",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "63ef08be7ef75e7a",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "memory-hot-rehydration-weekly-sun-2am"
+}

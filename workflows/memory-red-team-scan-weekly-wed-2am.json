@@ -1,0 +1,196 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Wed 2AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 2 * * 3",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "call_red_team",
+      "name": "Call Red Team",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"tool\":\"red_team\",\"args\":{\"operation\":\"campaign\",\"categories\":[\"memory_poisoning\",\"prompt_injection\",\"data_exfiltration\"]}}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://mcp-server:5681/tools/call"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "parse_result",
+      "name": "Parse Result",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst result = response.content || response.result || response;\nconst summary = typeof result === 'string' ? result : JSON.stringify(result).substring(0, 500);\n\nreturn [{ json: {\n  action: 'RED_TEAM_SCAN',\n  tool: 'red_team',\n  operation: 'campaign',\n  categories: ['memory_poisoning', 'prompt_injection', 'data_exfiltration'],\n  summary: summary,\n  timestamp: new Date().toISOString(),\n  source: 'n8n_scheduled'\n}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "embed_audit",
+      "name": "Embed Audit",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'red team security scan memory_poisoning prompt_injection data_exfiltration ' + $json.summary.substring(0, 200)}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_audit",
+      "name": "Build Audit Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst parsed = $('Parse Result').first().json;\nif (!embedding) return { json: { error: 'no embedding' } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        action: parsed.action,\n        tool: parsed.tool,\n        operation: parsed.operation,\n        categories: parsed.categories,\n        summary: parsed.summary,\n        timestamp: parsed.timestamp,\n        source: parsed.source\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        880,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_audit",
+      "name": "Store Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Build Audit Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Call Red Team": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Parse Result",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Audit Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Parse Result": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Weekly Wed 2AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Call Red Team",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "f5a404a4edfdc6c1",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Red Team Scan (Weekly Wed 2AM)"
+}

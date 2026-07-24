@@ -1,0 +1,96 @@
+{% extends "layout.html" %}
+{% set active = "explorer" %}
+{% block title %}Explorer — Memory Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>Explorer</h2>
+    <span class="page-info" id="sub">Browse any live collection or table</span>
+</div>
+<div class="filter-bar">
+    <select id="kind" class="input" onchange="loadList()">
+        <option value="qdrant">Qdrant collections</option>
+        <option value="pg">claude-memory-postgres tables</option>
+    </select>
+    <select id="target" class="input" onchange="loadRows()"></select>
+</div>
+<div class="table-wrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+<div class="pagination">
+    <button class="btn btn-ghost" onclick="prev()">Prev</button>
+    <span class="page-info" id="pginfo"></span>
+    <button class="btn btn-ghost" onclick="next()">Next</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+var page = 1, kind = 'qdrant', total = 0;
+
+function esc(s) { return (s == null ? '' : String(s)); }
+
+async function loadList() {
+    kind = document.getElementById('kind').value;
+    var url = kind === 'qdrant' ? '/api/collections' : '/api/pg2/tables';
+    var sel = document.getElementById('target');
+    sel.replaceChildren();
+    try {
+        var d = await (await fetch(url)).json();
+        var items = kind === 'qdrant' ? (d.collections || []) : (d.tables || []);
+        items.forEach(function(it) {
+            var v = kind === 'qdrant' ? it.name : (it.schema + '.' + it.table);
+            var n = (it.count != null ? it.count : it.rows);
+            var o = document.createElement('option');
+            o.value = v;
+            o.textContent = v + ' (' + (n != null ? n.toLocaleString() : '?') + ')';
+            sel.appendChild(o);
+        });
+        if (!items.length) {
+            var o = document.createElement('option');
+            o.textContent = kind === 'pg' ? 'claude-memory-postgres unavailable' : 'none';
+            sel.appendChild(o);
+        }
+        loadRows();
+    } catch (e) {
+        document.getElementById('pginfo').textContent = 'Error loading list';
+    }
+}
+
+function loadRows() { page = 1; render(); }
+
+async function render() {
+    var target = document.getElementById('target').value;
+    if (!target) return;
+    var url;
+    if (kind === 'qdrant') {
+        url = '/api/collection/' + encodeURIComponent(target) + '?page=' + page + '&page_size=50';
+    } else {
+        var parts = target.split('.');
+        url = '/api/pg2/table/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '?page=' + page + '&page_size=50';
+    }
+    try {
+        var d = await (await fetch(url)).json();
+        var rows = kind === 'qdrant'
+            ? (d.points || []).map(function(p) { return Object.assign({ _id: p.id }, p.payload); })
+            : (d.rows || []);
+        total = d.total || 0;
+        var cols = rows.length ? Object.keys(rows[0]).slice(0, 8) : [];
+        document.querySelector('#tbl thead').innerHTML =
+            '<tr>' + cols.map(function(c) { return '<th>' + c + '</th>'; }).join('') + '</tr>';
+        document.querySelector('#tbl tbody').innerHTML = rows.length
+            ? rows.map(function(r) {
+                return '<tr>' + cols.map(function(c) {
+                    var cell = esc(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]).slice(0, 140);
+                    return '<td title="' + esc(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]).replace(/"/g, '&quot;').slice(0, 500) + '">' + cell + '</td>';
+                }).join('') + '</tr>';
+            }).join('')
+            : '<tr><td>No rows</td></tr>';
+        document.getElementById('pginfo').textContent = 'Page ' + page + ' · ' + total.toLocaleString() + ' total';
+    } catch (e) {
+        document.querySelector('#tbl tbody').innerHTML = '<tr><td>Error loading rows</td></tr>';
+    }
+}
+
+function prev() { if (page > 1) { page--; render(); } }
+function next() { if (page * 50 < total) { page++; render(); } }
+
+loadList();
+</script>
+{% endblock %}

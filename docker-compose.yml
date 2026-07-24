@@ -1,0 +1,138 @@
+# bulletproof-memory — the full memory system in one compose file.
+#
+#   ./install.sh          # recommended: brings up everything + inits + imports workflows
+#   docker compose up -d  # or bring up the containers yourself
+#
+# Services: Qdrant (vectors), Postgres (relational tiers), Ollama (embeddings),
+# n8n (runs the 34 scheduled memory workflows), the MCP server (governance HTTP +
+# stdio), and the dashboard.
+#
+# BRING YOUR OWN OLLAMA: the ollama service pulls nomic-embed-text on first run
+# (multi-GB). Already run Ollama? Comment out the service and set OLLAMA_URL.
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    ports:
+      - "${QDRANT_PORT:-6334}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MEMPG_USER:-memory}
+      POSTGRES_PASSWORD: ${MEMPG_PASSWORD:-memory}
+      POSTGRES_DB: ${MEMPG_DB:-memory}
+    ports:
+      - "${MEMPG_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MEMPG_USER:-memory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: >
+      sh -c "ollama serve & sleep 5 && ollama pull ${EMBED_MODEL:-nomic-embed-text} && wait"
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-changeme-encryption-key}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${MEMPG_DB:-memory}
+      DB_POSTGRESDB_USER: ${MEMPG_USER:-memory}
+      DB_POSTGRESDB_PASSWORD: ${MEMPG_PASSWORD:-memory}
+    ports:
+      - "${N8N_PORT:-5679}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mcp-server:
+    build: ./packages/mcp-server
+    restart: unless-stopped
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      OLLAMA_URL: http://ollama:11434
+      CLAUDE_MEMORY_PG_HOST: postgres
+      CLAUDE_MEMORY_PG_PORT: "5432"
+      CLAUDE_MEMORY_PG_USER: ${MEMPG_USER:-memory}
+      CLAUDE_MEMORY_PG_PASSWORD: ${MEMPG_PASSWORD:-memory}
+      CLAUDE_MEMORY_PG_DB: ${MEMPG_DB:-memory}
+      GOVERNANCE_HTTP_PORT: "5681"
+      GOVERNANCE_API_KEY: ${GOVERNANCE_API_KEY:-changeme-governance-key}
+    ports:
+      - "${GOVERNANCE_HTTP_PORT:-5681}:5681"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build: ./packages/dashboard
+    restart: unless-stopped
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      OLLAMA_URL: http://ollama:11434
+      MEMPG_HOST: postgres
+      DECISIONS_PG_HOST: postgres
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASS_HASH: ${DASHBOARD_PASS_HASH:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      N8N_HEALTH_URL: http://n8n:5678/healthz
+      MEMGRAPH_HOST: memgraph
+    ports:
+      - "${DASHBOARD_PORT:-8092}:8092"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Optional graph tier. Comment out if you don't need memory-link graphs.
+  memgraph:
+    image: memgraph/memgraph:latest
+    restart: unless-stopped
+    ports:
+      - "${MEMGRAPH_PORT:-7687}:7687"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+
+volumes:
+  qdrant_data:
+  postgres_data:
+  ollama_data:
+  n8n_data:
+  memgraph_data:

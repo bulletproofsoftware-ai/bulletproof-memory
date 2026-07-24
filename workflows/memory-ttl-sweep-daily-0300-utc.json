@@ -1,0 +1,269 @@
+{
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Daily 3AM UTC",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 3 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "listcol",
+      "name": "List Collections",
+      "parameters": {
+        "jsCode": "return [\n  'claude_memories', 'short_term_memory', 'working_memory',\n  'learnings', 'procedures', 'trajectories', 'episodes',\n  'session_transcripts'\n].map(c => ({ json: { collection: c } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "loop",
+      "name": "Each Collection",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "continueOnFail": true,
+      "id": "scroll",
+      "name": "Scroll Collection",
+      "parameters": {
+        "authentication": "none",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":1000,\"with_payload\":true,\"with_vector\":false,\"filter\":{\"must_not\":[{\"is_empty\":{\"key\":\"expires_at\"}}]}}",
+        "method": "POST",
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "=http://qdrant:6333/collections/{{ $json.collection }}/points/scroll"
+      },
+      "position": [
+        660,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "filter",
+      "name": "Filter Expired",
+      "parameters": {
+        "jsCode": "const collection = $('Each Collection').first().json.collection;\nconst points = $input.first().json.result?.points || [];\nconst now = new Date();\nconst expired = points.filter(p => p.payload?.expires_at && new Date(p.payload.expires_at) < now);\nif (expired.length === 0) {\n  return [{ json: { collection, has_expired: false, count: 0, point_ids: [] } }];\n}\nreturn [{ json: {\n  collection,\n  has_expired: true,\n  count: expired.length,\n  point_ids: expired.map(p => p.id),\n  details: expired.map(p => ({\n    id: p.id,\n    sensitivity: p.payload?.sensitivity || 'unknown',\n    preview: (p.payload?.content || '').slice(0, 80)\n  }))\n} }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check",
+      "name": "Has Expired?",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.count }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          }
+        }
+      },
+      "position": [
+        1100,
+        200
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2
+    },
+    {
+      "continueOnFail": true,
+      "id": "delete",
+      "name": "Delete Expired",
+      "parameters": {
+        "authentication": "none",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({ points: $json.point_ids }) }}",
+        "method": "POST",
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "=http://qdrant:6333/collections/{{ $json.collection }}/points/delete"
+      },
+      "position": [
+        1320,
+        100
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "noop",
+      "name": "No Expired",
+      "parameters": {},
+      "position": [
+        1320,
+        300
+      ],
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Daily 3AM UTC": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "List Collections",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Delete Expired": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Each Collection",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Each Collection": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Collection",
+            "type": "main"
+          }
+        ],
+        []
+      ]
+    },
+    "Filter Expired": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Expired?",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Expired?": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Delete Expired",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "No Expired",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "List Collections": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Each Collection",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "No Expired": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Each Collection",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Collection": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Filter Expired",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "3255e2db722060bb",
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "UTC"
+  },
+  "name": "Memory TTL Sweep (Daily 03:00 UTC)"
+}

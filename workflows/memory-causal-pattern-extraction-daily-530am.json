@@ -1,0 +1,324 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 5:30AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "30 5 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_audit",
+      "name": "Scroll Error Events",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":500,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "group_errors",
+      "name": "Group Error Patterns",
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst points = response.result?.points || [];\nconst errorMap = new Map();\nconst weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;\n\nfor (const p of points) {\n  const payload = p.payload || {};\n  const action = payload.action || '';\n  const error = payload.error || payload.error_message || '';\n  const ts = new Date(payload.timestamp || 0).getTime();\n  \n  if (!error || ts < weekAgo) continue;\n  \n  // Group by action + first 100 chars of error\n  const key = action + '::' + error.substring(0, 100);\n  if (!errorMap.has(key)) {\n    errorMap.set(key, {\n      action: action,\n      error_pattern: error.substring(0, 200),\n      occurrences: 0,\n      first_seen: payload.timestamp,\n      last_seen: payload.timestamp,\n      projects: new Set()\n    });\n  }\n  const e = errorMap.get(key);\n  e.occurrences++;\n  e.last_seen = payload.timestamp;\n  if (payload.project) e.projects.add(payload.project);\n}\n\n// Only patterns with 2+ occurrences\nconst patterns = Array.from(errorMap.values())\n  .filter(e => e.occurrences >= 2)\n  .map(e => ({ ...e, projects: Array.from(e.projects) }));\n\nif (patterns.length === 0) {\n  return [{ json: { _empty: true } }];\n}\nreturn patterns.map(p => ({ json: { ...p, _empty: false } }));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_patterns",
+      "name": "Has Patterns",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Patterns",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "embed",
+      "name": "Embed Pattern",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'error pattern: ' + $json.action + ' ' + $json.error_pattern}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build Analysis Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst pattern = $('Loop Patterns').first().json;\nif (!embedding) return { json: { _skip: true } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        analysis_type: 'error_pattern',\n        action: pattern.action,\n        error_pattern: pattern.error_pattern,\n        occurrences: pattern.occurrences,\n        first_seen: pattern.first_seen,\n        last_seen: pattern.last_seen,\n        affected_projects: pattern.projects,\n        severity: pattern.occurrences >= 10 ? 'high' : pattern.occurrences >= 5 ? 'medium' : 'low',\n        created_at: new Date().toISOString(),\n        source: 'auto_audit_extraction'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_point",
+      "name": "Store Causal Analysis",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/causal_analysis/points"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "parameters": {
+        "jsCode": "return [{ json: { patterns_found: 0, message: 'no error patterns detected' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "causal-extraction",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "e250ec91-e848-4d2e-9822-a27be8e6791f"
+    }
+  ],
+  "connections": {
+    "Build Analysis Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Causal Analysis",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 5:30AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Error Events",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Pattern": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Analysis Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Group Error Patterns": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Patterns",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Patterns": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summary",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Patterns",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Patterns": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Embed Pattern",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Error Events": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Group Error Patterns",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Store Causal Analysis": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Patterns",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Error Events",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "c21fde45d2045d66",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Causal Pattern Extraction (Daily 5:30AM)"
+}

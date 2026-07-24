@@ -1,0 +1,18 @@
+# gitleaks config for the bulletproof-memory monorepo.
+# Allowlists known false positives: references to key-FILE PATHS (loaded at
+# runtime from env or a gitignored keys/ dir). No secret material is committed.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Path-reference false positives (no secret material present)"
+regexTargets = ["match", "line"]
+regexes = [
+  '''ED25519_(PRIVATE|PUBLIC)_KEY_PATH''',
+  '''ed25519-(private|public)\.pem''',
+]
+paths = [
+  '''\.env\.example$''',
+  '''package-lock\.json$''',
+]

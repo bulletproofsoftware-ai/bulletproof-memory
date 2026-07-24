@@ -1,0 +1,639 @@
+{% extends "layout.html" %}
+{% set active = "memories" %}
+{% block title %}Memories — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Memories</h2>
+    <span class="page-info" id="total-count"></span>
+</div>
+
+<div class="filter-bar">
+    <select class="input" id="filter-type" onchange="loadMemories(1)">
+        <option value="">All types</option>
+        <option value="preference">preference</option>
+        <option value="fact">fact</option>
+        <option value="context">context</option>
+        <option value="decision">decision</option>
+    </select>
+    <select class="input" id="filter-project" onchange="loadMemories(1)">
+        <option value="">All projects</option>
+    </select>
+    <select class="input" id="filter-tag" onchange="loadMemories(1)">
+        <option value="">All tags</option>
+    </select>
+    <select class="input" id="filter-temporal" onchange="loadMemories(1)">
+        <option value="">All temporal</option>
+        <option value="permanent">permanent</option>
+        <option value="decaying">decaying</option>
+        <option value="deadline">deadline</option>
+        <option value="periodic">periodic</option>
+    </select>
+    <select class="input" id="filter-sensitivity" onchange="loadMemories(1)">
+        <option value="">All sensitivity</option>
+        <option value="public">public</option>
+        <option value="internal">internal</option>
+        <option value="sensitive">sensitive</option>
+        <option value="restricted">restricted</option>
+    </select>
+    <select class="input" id="filter-meta" onchange="loadMemories(1)">
+        <option value="">All memories</option>
+        <option value="meta">Meta-memories only</option>
+        <option value="raw">Raw memories only</option>
+    </select>
+</div>
+
+<div id="memory-table"></div>
+<div id="pagination" class="pagination"></div>
+
+<div id="modal-container"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentPage = 1;
+var currentSort = 'created_at';
+var currentOrder = 'desc';
+
+function createText(tag, text, className) {
+    var el = document.createElement(tag);
+    el.textContent = text || '';
+    if (className) el.className = className;
+    return el;
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    try {
+        var d = new Date(ts);
+        var date = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        var time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        return date + ' ' + time;
+    } catch(e) { return ts.slice(0, 19); }
+}
+
+function toggleSort(field) {
+    if (currentSort === field) {
+        currentOrder = currentOrder === 'desc' ? 'asc' : 'desc';
+    } else {
+        currentSort = field;
+        currentOrder = field === 'created_at' ? 'desc' : 'asc';
+    }
+    loadMemories(1);
+}
+
+function sortIndicator(field) {
+    if (currentSort !== field) return '';
+    return currentOrder === 'desc' ? ' \u25BC' : ' \u25B2';
+}
+
+var TEMPORAL_COLORS = {
+    permanent: 'tag-project',
+    decaying: 'tag-type',
+    deadline: 'tag-sensitivity',
+    periodic: 'tag-default',
+};
+
+var STATUS_COLORS = {
+    active: 'tag-project',
+    contested: 'tag-sensitivity',
+    superseded: 'tag-default',
+};
+
+var TIER_COLORS = {
+    hot: 'tag-sensitivity',
+    warm: 'tag-type',
+    cold: 'tag-default',
+    long_term: 'tag-project',
+    short_term: 'tag-default',
+    working: 'tag-default',
+};
+
+async function loadFilters() {
+    try {
+        var responses = await Promise.all([fetch('/api/projects'), fetch('/api/tags')]);
+        var projData = await responses[0].json();
+        var tagData = await responses[1].json();
+
+        var projSelect = document.getElementById('filter-project');
+        projData.projects.forEach(function(p) {
+            var opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p;
+            projSelect.appendChild(opt);
+        });
+
+        var tagSelect = document.getElementById('filter-tag');
+        tagData.tags.forEach(function(t) {
+            var opt = document.createElement('option');
+            opt.value = t;
+            opt.textContent = t;
+            tagSelect.appendChild(opt);
+        });
+    } catch(e) { /* filter load non-critical */ }
+}
+
+async function loadMemories(page) {
+    currentPage = page || 1;
+    var type = document.getElementById('filter-type').value;
+    var project = document.getElementById('filter-project').value;
+    var tag = document.getElementById('filter-tag').value;
+    var temporal = document.getElementById('filter-temporal').value;
+    var sensitivity = document.getElementById('filter-sensitivity').value;
+
+    var url = '/api/memories?page=' + currentPage + '&sort=' + currentSort + '&order=' + currentOrder;
+    if (type) url += '&mem_type=' + encodeURIComponent(type);
+    if (project) url += '&project=' + encodeURIComponent(project);
+    if (tag) url += '&tag=' + encodeURIComponent(tag);
+    if (temporal) url += '&temporal_class=' + encodeURIComponent(temporal);
+    if (sensitivity) url += '&sensitivity=' + encodeURIComponent(sensitivity);
+
+    try {
+        var resp = await fetch(url);
+        var data = await resp.json();
+
+        document.getElementById('total-count').textContent = data.total + ' memories';
+
+        var tableWrap = document.createElement('div');
+        tableWrap.className = 'table-wrap';
+        var table = document.createElement('table');
+        var thead = document.createElement('thead');
+        var headerRow = document.createElement('tr');
+
+        var columns = [
+            { label: 'Created', field: 'created_at', sortable: true },
+            { label: 'Type', field: 'type', sortable: true },
+            { label: 'Project', field: 'project', sortable: true },
+            { label: 'Tier', field: null, sortable: false },
+            { label: 'Content', field: null, sortable: false },
+            { label: 'Hits', field: 'access_count', sortable: true },
+            { label: 'Temporal', field: 'temporal_class', sortable: true },
+            { label: 'Sensitivity', field: 'sensitivity', sortable: true },
+            { label: 'Tags', field: null, sortable: false },
+        ];
+
+        columns.forEach(function(col) {
+            var th = document.createElement('th');
+            if (col.sortable) {
+                th.style.cursor = 'pointer';
+                th.style.userSelect = 'none';
+                th.textContent = col.label + sortIndicator(col.field);
+                th.addEventListener('click', function() { toggleSort(col.field); });
+            } else {
+                th.textContent = col.label;
+            }
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        var tbody = document.createElement('tbody');
+        data.memories.forEach(function(m) {
+            var tr = document.createElement('tr');
+            tr.style.cursor = 'pointer';
+            tr.addEventListener('click', function() { showDetail(m); });
+
+            /* Created timestamp */
+            var tdDate = document.createElement('td');
+            tdDate.style.fontSize = '12px';
+            tdDate.style.color = 'var(--text-muted)';
+            tdDate.style.whiteSpace = 'nowrap';
+            tdDate.textContent = formatTimestamp(m.created_at);
+            tr.appendChild(tdDate);
+
+            /* Type */
+            var tdType = document.createElement('td');
+            tdType.appendChild(createText('span', m.type, 'tag tag-type'));
+            tr.appendChild(tdType);
+
+            /* Project */
+            var tdProj = document.createElement('td');
+            tdProj.appendChild(createText('span', m.project || '-', 'tag tag-project'));
+            tr.appendChild(tdProj);
+
+            /* Tier */
+            var tdTier = document.createElement('td');
+            if (m.tier) {
+                tdTier.appendChild(createText('span', m.tier, 'tag ' + (TIER_COLORS[m.tier] || 'tag-default')));
+            } else {
+                tdTier.style.color = 'var(--text-muted)';
+                tdTier.textContent = '-';
+            }
+            tr.appendChild(tdTier);
+
+            /* Content */
+            var tdContent = document.createElement('td');
+            var contentText = m.content || '';
+            if (m.is_meta_memory) {
+                var metaSpan = createText('span', 'META ', '');
+                metaSpan.style.cssText = 'color:#a855f7;font-weight:600;font-size:10px';
+                tdContent.appendChild(metaSpan);
+            }
+            if (m.conflict_status && ['conflict', 'contested', 'contradiction'].indexOf(m.conflict_status) !== -1) {
+                var cflag = createText('span', '⚠ ' + m.conflict_status + ' ', '');
+                cflag.style.cssText = 'color:var(--danger);font-weight:600;font-size:10px';
+                cflag.title = m.conflict_reason || '';
+                tdContent.appendChild(cflag);
+            }
+            tdContent.appendChild(document.createTextNode(contentText));
+            tr.appendChild(tdContent);
+
+            /* Access count (Hits) */
+            var tdHits = document.createElement('td');
+            var ac = m.access_count || 0;
+            tdHits.style.textAlign = 'center';
+            if (ac > 0) {
+                var hitSpan = createText('span', ac.toString(), 'tag');
+                hitSpan.style.cssText = 'background:' + (ac >= 5 ? '#065f46' : '#1e3a5f') + ';color:' + (ac >= 5 ? '#6ee7b7' : '#93c5fd');
+                tdHits.appendChild(hitSpan);
+            } else {
+                tdHits.style.color = 'var(--text-muted)';
+                tdHits.textContent = '0';
+            }
+            tr.appendChild(tdHits);
+
+            /* Temporal class */
+            var tdTemporal = document.createElement('td');
+            var temporalClass = m.temporal_class || 'permanent';
+            var temporalTag = createText('span', temporalClass, 'tag ' + (TEMPORAL_COLORS[temporalClass] || 'tag-default'));
+            tdTemporal.appendChild(temporalTag);
+            if (m.deadline_date) {
+                var dl = document.createElement('div');
+                dl.style.cssText = 'font-size:10px;color:var(--warning);margin-top:2px';
+                dl.textContent = 'due: ' + m.deadline_date.slice(0, 10);
+                tdTemporal.appendChild(dl);
+            }
+            tr.appendChild(tdTemporal);
+
+            /* Sensitivity */
+            var tdSens = document.createElement('td');
+            var sensVal = m.sensitivity || '';
+            if (sensVal) {
+                var sensColor = { public: 'tag-project', internal: 'tag-type', sensitive: 'tag-sensitivity', restricted: 'tag-sensitivity' };
+                tdSens.appendChild(createText('span', sensVal, 'tag ' + (sensColor[sensVal] || 'tag-default')));
+            }
+            tr.appendChild(tdSens);
+
+            /* Tags */
+            var tdTags = document.createElement('td');
+            (m.tags || []).slice(0, 3).forEach(function(t) {
+                tdTags.appendChild(createText('span', t, 'tag tag-default'));
+                tdTags.appendChild(document.createTextNode(' '));
+            });
+            tr.appendChild(tdTags);
+
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        tableWrap.appendChild(table);
+
+        var container = document.getElementById('memory-table');
+        container.replaceChildren(tableWrap);
+
+        /* Pagination */
+        var pagDiv = document.getElementById('pagination');
+        pagDiv.replaceChildren();
+
+        if (data.page > 1) {
+            var prevBtn = document.createElement('button');
+            prevBtn.className = 'btn btn-ghost';
+            prevBtn.textContent = 'Prev';
+            prevBtn.addEventListener('click', function() { loadMemories(data.page - 1); });
+            pagDiv.appendChild(prevBtn);
+        }
+
+        var pageInfo = document.createElement('span');
+        pageInfo.className = 'page-info';
+        pageInfo.textContent = 'Page ' + data.page + ' of ' + data.total_pages;
+        pagDiv.appendChild(pageInfo);
+
+        if (data.page < data.total_pages) {
+            var nextBtn = document.createElement('button');
+            nextBtn.className = 'btn btn-ghost';
+            nextBtn.textContent = 'Next';
+            nextBtn.addEventListener('click', function() { loadMemories(data.page + 1); });
+            pagDiv.appendChild(nextBtn);
+        }
+    } catch(e) {
+        var errP = document.createElement('p');
+        errP.textContent = 'Error loading memories';
+        document.getElementById('memory-table').replaceChildren(errP);
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-container').replaceChildren();
+}
+
+function showDetail(m) {
+    var container = document.getElementById('modal-container');
+    container.replaceChildren();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', closeModal);
+
+    var modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.maxWidth = '700px';
+    modal.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    var title = document.createElement('h3');
+    title.textContent = '[' + (m.type || 'unknown') + '] ' + (m.project || 'global');
+    modal.appendChild(title);
+
+    var meta = document.createElement('div');
+    meta.style.cssText = 'font-size:12px;color:var(--text-muted);margin-bottom:12px';
+    meta.textContent = 'ID: ' + m.id;
+    modal.appendChild(meta);
+
+    var details = [
+        ['Created', formatTimestamp(m.created_at)],
+        ['Temporal Class', m.temporal_class || 'permanent'],
+        ['Sensitivity', m.sensitivity || '-'],
+        ['Status', m.status || 'active'],
+    ];
+    if (m.tier) details.push(['Tier', m.tier]);
+    if (m.recall_count) details.push(['Recall Count', String(m.recall_count)]);
+    if (m.verification_count) details.push(['Verifications', String(m.verification_count)]);
+    if (m.conflict_status) details.push(['Conflict', m.conflict_status + (m.conflict_reason ? ' — ' + m.conflict_reason : '')]);
+    if (m.deadline_date) details.push(['Deadline', m.deadline_date.slice(0, 10)]);
+    if (m.last_verified_date) details.push(['Last Verified', formatTimestamp(m.last_verified_date)]);
+    if (m.decay_halflife_days) details.push(['Decay Halflife', m.decay_halflife_days + ' days']);
+    if (m.confidence_basis) details.push(['Confidence Basis', m.confidence_basis]);
+    if (m.provenance_hash) details.push(['Provenance', m.provenance_hash.slice(0, 16) + '...']);
+    if (m.jurisdiction) details.push(['Jurisdiction', m.jurisdiction]);
+
+    var detailGrid = document.createElement('div');
+    detailGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:16px;font-size:13px';
+    details.forEach(function(d) {
+        var label = createText('span', d[0], '');
+        label.style.color = 'var(--text-muted)';
+        detailGrid.appendChild(label);
+        detailGrid.appendChild(createText('span', d[1], ''));
+    });
+    modal.appendChild(detailGrid);
+
+    if (m.tags && m.tags.length) {
+        var tagDiv = document.createElement('div');
+        tagDiv.style.marginBottom = '12px';
+        m.tags.forEach(function(t) {
+            tagDiv.appendChild(createText('span', t, 'tag tag-default'));
+            tagDiv.appendChild(document.createTextNode(' '));
+        });
+        modal.appendChild(tagDiv);
+    }
+
+    var pre = document.createElement('pre');
+    pre.textContent = m.full_content || m.content || '';
+    modal.appendChild(pre);
+
+    /* Action buttons */
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)';
+
+    var editBtn = document.createElement('button');
+    editBtn.className = 'btn';
+    editBtn.style.cssText = 'background:var(--primary);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', function() { showEditForm(m); });
+    btnRow.appendChild(editBtn);
+
+    var auditBtn = document.createElement('button');
+    auditBtn.className = 'btn btn-ghost';
+    auditBtn.style.cssText = 'padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;border:1px solid var(--border);background:transparent;color:var(--text)';
+    auditBtn.textContent = 'Audit Log';
+    auditBtn.addEventListener('click', function() { showAuditLog(m.id); });
+    btnRow.appendChild(auditBtn);
+
+    var spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    btnRow.appendChild(spacer);
+
+    var delBtn = document.createElement('button');
+    delBtn.style.cssText = 'background:var(--danger);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', function() { confirmDelete(m); });
+    btnRow.appendChild(delBtn);
+
+    modal.appendChild(btnRow);
+
+    overlay.appendChild(modal);
+    container.appendChild(overlay);
+}
+
+function showEditForm(m) {
+    var container = document.getElementById('modal-container');
+    container.replaceChildren();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', closeModal);
+
+    var modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.maxWidth = '700px';
+    modal.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    modal.appendChild(createText('h3', 'Edit Memory', ''));
+
+    var form = document.createElement('div');
+    form.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:12px';
+
+    /* Content */
+    form.appendChild(createText('label', 'Content', ''));
+    var contentArea = document.createElement('textarea');
+    contentArea.style.cssText = 'width:100%;min-height:120px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-family:inherit;font-size:13px;resize:vertical';
+    contentArea.value = m.full_content || m.content || '';
+    form.appendChild(contentArea);
+
+    /* Row: Type + Project + Sensitivity */
+    var row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px';
+
+    function makeSelect(label, current, options) {
+        var wrap = document.createElement('div');
+        wrap.appendChild(createText('label', label, ''));
+        var sel = document.createElement('select');
+        sel.className = 'input';
+        sel.style.cssText = 'width:100%;margin-top:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px';
+        options.forEach(function(o) {
+            var opt = document.createElement('option');
+            opt.value = o; opt.textContent = o;
+            if (o === current) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        wrap.appendChild(sel);
+        return { el: wrap, sel: sel };
+    }
+
+    var typeSelect = makeSelect('Type', m.type || 'fact', ['preference','fact','context','decision']);
+    var sensSelect = makeSelect('Sensitivity', m.sensitivity || 'internal', ['public','internal','sensitive','restricted']);
+    var statusSelect = makeSelect('Status', m.status || 'active', ['active','contested','superseded']);
+
+    row.appendChild(typeSelect.el);
+    row.appendChild(sensSelect.el);
+    row.appendChild(statusSelect.el);
+    form.appendChild(row);
+
+    /* Project */
+    form.appendChild(createText('label', 'Project', ''));
+    var projectInput = document.createElement('input');
+    projectInput.type = 'text';
+    projectInput.value = m.project || '';
+    projectInput.style.cssText = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:13px';
+    form.appendChild(projectInput);
+
+    /* Tags */
+    form.appendChild(createText('label', 'Tags (comma-separated)', ''));
+    var tagsInput = document.createElement('input');
+    tagsInput.type = 'text';
+    tagsInput.value = (m.tags || []).join(', ');
+    tagsInput.style.cssText = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:13px';
+    form.appendChild(tagsInput);
+
+    /* Buttons */
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+
+    var saveBtn = document.createElement('button');
+    saveBtn.style.cssText = 'background:var(--primary);color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', async function() {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        var payload = {
+            content: contentArea.value,
+            type: typeSelect.sel.value,
+            sensitivity: sensSelect.sel.value,
+            status: statusSelect.sel.value,
+            project: projectInput.value,
+            tags: tagsInput.value.split(',').map(function(t) { return t.trim(); }).filter(Boolean),
+        };
+        try {
+            var resp = await fetch('/api/memories/' + encodeURIComponent(m.id), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            var result = await resp.json();
+            if (resp.ok) {
+                closeModal();
+                loadMemories(currentPage);
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save';
+            }
+        } catch(e) {
+            alert('Network error');
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        }
+    });
+    btnRow.appendChild(saveBtn);
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.style.cssText = 'background:transparent;color:var(--text);border:1px solid var(--border);padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', function() { showDetail(m); });
+    btnRow.appendChild(cancelBtn);
+
+    form.appendChild(btnRow);
+    modal.appendChild(form);
+
+    overlay.appendChild(modal);
+    container.appendChild(overlay);
+}
+
+function confirmDelete(m) {
+    if (!confirm('Delete this memory? This action is logged but cannot be undone.\n\n' + (m.content || '').slice(0, 100))) return;
+    fetch('/api/memories/' + encodeURIComponent(m.id), { method: 'DELETE' })
+        .then(function(r) { return r.json(); })
+        .then(function(result) {
+            if (result.status === 'ok') {
+                closeModal();
+                loadMemories(currentPage);
+            } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+            }
+        })
+        .catch(function() { alert('Network error'); });
+}
+
+function showAuditLog(memoryId) {
+    var container = document.getElementById('modal-container');
+    container.replaceChildren();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', closeModal);
+
+    var modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.maxWidth = '700px';
+    modal.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    modal.appendChild(createText('h3', 'Audit Log', ''));
+    var loading = createText('p', 'Loading...', '');
+    loading.style.color = 'var(--text-muted)';
+    modal.appendChild(loading);
+
+    overlay.appendChild(modal);
+    container.appendChild(overlay);
+
+    fetch('/api/audit?memory_id=' + encodeURIComponent(memoryId) + '&limit=50')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            modal.removeChild(loading);
+            if (!data.entries || data.entries.length === 0) {
+                modal.appendChild(createText('p', 'No audit entries for this memory.', ''));
+                return;
+            }
+            var list = document.createElement('div');
+            list.style.cssText = 'display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto';
+            data.entries.forEach(function(e) {
+                var entry = document.createElement('div');
+                entry.style.cssText = 'background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px';
+
+                var header = document.createElement('div');
+                header.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px';
+                var actionTag = createText('span', e.action, 'tag ' + (e.action.includes('delete') ? 'tag-sensitivity' : 'tag-type'));
+                header.appendChild(actionTag);
+                var ts = createText('span', formatTimestamp(e.timestamp), '');
+                ts.style.cssText = 'font-size:11px;color:var(--text-muted)';
+                header.appendChild(ts);
+                entry.appendChild(header);
+
+                if (e.details.changes) {
+                    Object.keys(e.details.changes).forEach(function(key) {
+                        var c = e.details.changes[key];
+                        var line = document.createElement('div');
+                        line.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:2px';
+                        var fromStr = typeof c.from === 'object' ? JSON.stringify(c.from) : String(c.from || '');
+                        var toStr = typeof c.to === 'object' ? JSON.stringify(c.to) : String(c.to || '');
+                        line.textContent = key + ': ' + fromStr.slice(0, 60) + ' → ' + toStr.slice(0, 60);
+                        entry.appendChild(line);
+                    });
+                }
+
+                if (e.details.content_preview) {
+                    var preview = createText('div', e.details.content_preview.slice(0, 120), '');
+                    preview.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:4px;font-style:italic';
+                    entry.appendChild(preview);
+                }
+
+                list.appendChild(entry);
+            });
+            modal.appendChild(list);
+        })
+        .catch(function() {
+            modal.removeChild(loading);
+            modal.appendChild(createText('p', 'Failed to load audit log.', ''));
+        });
+}
+
+loadFilters();
+loadMemories(1);
+</script>
+{% endblock %}

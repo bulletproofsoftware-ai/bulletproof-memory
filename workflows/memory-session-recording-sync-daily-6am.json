@@ -1,0 +1,369 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 6AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 6 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll_episodes",
+      "name": "Scroll Episodes",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":50,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/episodes/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "scroll_existing",
+      "name": "Scroll Existing Recordings",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":200,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/session_recordings/points/scroll"
+      },
+      "position": [
+        220,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "find_new",
+      "name": "Find New Episodes",
+      "parameters": {
+        "jsCode": "const episodes = $('Scroll Episodes').first().json.result?.points || [];\nconst recordings = $('Scroll Existing Recordings').first().json.result?.points || [];\n\nconst recordedIds = new Set(recordings.map(r => r.payload?.source_episode_id).filter(Boolean));\n\nconst newEpisodes = episodes.filter(e => !recordedIds.has(e.id));\n\nif (newEpisodes.length === 0) {\n  return [{ json: { _empty: true } }];\n}\n\nreturn newEpisodes.map(e => ({\n  json: {\n    _empty: false,\n    episode_id: e.id,\n    task: e.payload?.task || 'unknown',\n    project: e.payload?.project || 'unknown',\n    status: e.payload?.status || 'unknown',\n    started_at: e.payload?.started_at || '',\n    tools_used: e.payload?.tools_used || [],\n    files_modified: e.payload?.files_modified || [],\n    agents_invoked: e.payload?.agents_invoked || []\n  }\n}));",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_new",
+      "name": "Has New",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "check",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        }
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "loop",
+      "name": "Loop New",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "embed",
+      "name": "Embed Recording",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'session recording: ' + $json.task + ' project=' + $json.project + ' tools=' + ($json.tools_used || []).join(',')}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_point",
+      "name": "Build Recording Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst ep = $('Loop New').first().json;\nif (!embedding) return { json: { _skip: true } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        source_episode_id: ep.episode_id,\n        task: ep.task,\n        project: ep.project,\n        status: ep.status,\n        started_at: ep.started_at,\n        tools_used: ep.tools_used,\n        files_modified: ep.files_modified,\n        agents_invoked: ep.agents_invoked,\n        recorded_at: new Date().toISOString(),\n        source: 'auto_episode_sync'\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_point",
+      "name": "Store Recording",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/session_recordings/points"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "parameters": {
+        "jsCode": "return [{ json: { synced: 0, message: 'all episodes already recorded' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook Trigger",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "recording-sync",
+        "responseMode": "onReceived"
+      },
+      "position": [
+        0,
+        500
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "20302ae9-2a57-4460-9b4b-d27651ac01e4"
+    }
+  ],
+  "connections": {
+    "Build Recording Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Recording",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 6AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Episodes",
+            "type": "main"
+          },
+          {
+            "index": 0,
+            "node": "Scroll Existing Recordings",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Recording": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Recording Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Find New Episodes": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has New",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has New": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summary",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop New",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop New": {
+      "main": [
+        [],
+        [
+          {
+            "index": 0,
+            "node": "Embed Recording",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Episodes": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Find New Episodes",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Existing Recordings": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Episodes",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Store Recording": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop New",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Existing Recordings",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "853cd90d7e59dade",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Session Recording Sync (Daily 6AM)"
+}

@@ -1,0 +1,68 @@
+{% extends "layout.html" %}
+{% set active = "system" %}
+{% block title %}System — Memory Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>System Health & Pipeline</h2>
+    <span class="page-info" id="sub"></span>
+</div>
+<div class="card-grid" id="health"></div>
+<div class="chart-container">
+    <h3>claude-memory-postgres — relational backend</h3>
+    <div class="table-wrap"><table id="pg"><thead><tr><th>Schema</th><th>Table</th><th>Rows (est.)</th></tr></thead><tbody></tbody></table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function statusCard(label, val) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var l = document.createElement('div'); l.className = 'card-label'; l.textContent = label; card.appendChild(l);
+    var v = document.createElement('div');
+    var ok = val === 'ok';
+    v.className = 'card-value ' + (ok ? 'success' : 'warning');
+    v.style.fontSize = '16px';
+    v.textContent = ok ? 'OK' : (val || 'unknown');
+    card.appendChild(v);
+    return card;
+}
+
+async function loadHealth() {
+    try {
+        var d = await (await fetch('/health')).json();
+        var grid = document.getElementById('health');
+        grid.replaceChildren();
+        var order = ['status', 'qdrant', 'claude_memory_pg', 'drm_canary', 'memgraph', 'decisions_db', 'ollama', 'n8n'];
+        var labels = {
+            status: 'Overall', qdrant: 'Qdrant', claude_memory_pg: 'Memory PG',
+            drm_canary: 'DRM Canary', memgraph: 'Memgraph', decisions_db: 'Decisions DB',
+            ollama: 'Ollama', n8n: 'n8n'
+        };
+        order.forEach(function(k) {
+            if (d[k] != null) grid.appendChild(statusCard(labels[k] || k, d[k]));
+        });
+        document.getElementById('sub').textContent = 'overall: ' + (d.status || '?');
+    } catch (e) {
+        document.getElementById('health').textContent = 'Error loading /health';
+    }
+}
+
+async function loadPg() {
+    try {
+        var d = await (await fetch('/api/pg2/tables')).json();
+        var tb = document.querySelector('#pg tbody');
+        var rows = d.tables || [];
+        tb.innerHTML = rows.length
+            ? rows.map(function(r) {
+                return '<tr><td>' + r.schema + '</td><td>' + r.table + '</td><td>' +
+                       (r.rows != null ? r.rows.toLocaleString() : '?') + '</td></tr>';
+            }).join('')
+            : '<tr><td colspan="3">claude-memory-postgres unavailable</td></tr>';
+    } catch (e) {
+        document.querySelector('#pg tbody').innerHTML = '<tr><td colspan="3">Error</td></tr>';
+    }
+}
+loadHealth();
+loadPg();
+</script>
+{% endblock %}

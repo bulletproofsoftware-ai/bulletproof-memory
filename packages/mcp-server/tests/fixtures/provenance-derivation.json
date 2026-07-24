@@ -1,0 +1,18 @@
+{
+  "_comment": "CISO Condition B — TS<->Python provenance-derivation conformance fixture. Consumed by BOTH claude-memory-mcp/tests/feature-provenance.test.ts (vitest) and governance-plugin/tests/test_provenance_hook.py (pytest). Each case feeds `source` through the derivation function (with provenance_status OMITTED) and asserts `expected_provenance`. If the TS deriveProvenance and the Python _derive_prov ever diverge, one of the two suites fails. Keep this file byte-identical in both repos.",
+  "cases": [
+    { "source": "session-analyzer-auto", "expected_provenance": "generated" },
+    { "source": "USER",                   "expected_provenance": "user_confirmed" },
+    { "source": "user",                   "expected_provenance": "user_confirmed" },
+    { "source": "import",                 "expected_provenance": "imported" },
+    { "source": "imported",               "expected_provenance": "imported" },
+    { "source": "cli",                    "expected_provenance": "observed" },
+    { "source": "Consolidation-Bot",      "expected_provenance": "generated" },
+    { "source": "digest-writer",          "expected_provenance": "generated" },
+    { "source": "SummariZER",             "expected_provenance": "generated" },
+    { "source": "extractor",              "expected_provenance": "generated" },
+    { "source": "analyzer",               "expected_provenance": "generated" },
+    { "source": "",                       "expected_provenance": "observed" },
+    { "source": null,                     "expected_provenance": "observed" }
+  ]
+}

@@ -1,0 +1,237 @@
+{% extends "layout.html" %}
+{% set active = "dashboard" %}
+{% block title %}Dashboard — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Dashboard</h2>
+    <span class="page-info" id="health-status">Loading...</span>
+</div>
+
+<div class="chart-row">
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Memory Timeline (last 30 days)</h3>
+        <div class="chart-container" style="height: 200px; padding: 0; border: none;">
+            <canvas id="timeline-chart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Type Distribution</h3>
+        <div class="chart-container" style="height: 200px; padding: 0; border: none;">
+            <canvas id="type-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="chart-row">
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Top Projects</h3>
+        <div class="chart-container" style="height: 250px; padding: 0; border: none;">
+            <canvas id="project-chart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Sensitivity Distribution</h3>
+        <div class="chart-container" style="height: 250px; padding: 0; border: none;">
+            <canvas id="sensitivity-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="chart-row">
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Knowledge Graph</h3>
+        <div id="graph-stats" style="font-size:13px;color:var(--text-muted)"></div>
+    </div>
+    <div class="card">
+        <h3 style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Recent Activity</h3>
+        <div id="recent-list" style="max-height: 250px; overflow-y: auto;"></div>
+    </div>
+</div>
+
+<!-- Top Accessed Memories -->
+<div style="margin-top: 24px;">
+    <h3 style="font-size: 14px; color: var(--text-muted); margin-bottom: 12px;">Top Accessed Memories</h3>
+    <div id="top-accessed-list"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#ec4899', '#64748b'];
+
+Chart.defaults.color = '#8b8d97';
+Chart.defaults.borderColor = '#2a2e3a';
+
+function createText(tag, text, className) {
+    var el = document.createElement(tag);
+    el.textContent = text || '';
+    if (className) el.className = className;
+    return el;
+}
+
+async function loadDashboard() {
+    /* Health */
+    try {
+        var h = await fetch('/health');
+        var hd = await h.json();
+        var el = document.getElementById('health-status');
+        el.replaceChildren();
+        var qSpan = createText('span', 'Qdrant: ' + hd.qdrant);
+        qSpan.style.color = hd.qdrant === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(qSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var oSpan = createText('span', 'Ollama: ' + hd.ollama);
+        oSpan.style.color = hd.ollama === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(oSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var sSpan = createText('span', 'Decisions DB: ' + hd.decisions_db);
+        sSpan.style.color = hd.decisions_db === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(sSpan);
+        el.appendChild(document.createTextNode(' · '));
+        var nSpan = createText('span', 'n8n: ' + (hd.n8n || 'unknown'));
+        nSpan.style.color = hd.n8n === 'ok' ? '#22c55e' : '#ef4444';
+        el.appendChild(nSpan);
+    } catch(e) {
+        document.getElementById('health-status').textContent = 'Error';
+    }
+
+    /* Stats — charts and top-accessed */
+    var data = null;
+    try {
+        var s = await fetch('/api/stats');
+        data = await s.json();
+
+        /* Timeline chart */
+        if (data.timeline && data.timeline.length > 0) {
+            new Chart(document.getElementById('timeline-chart'), {
+                type: 'bar',
+                data: {
+                    labels: data.timeline.map(function(t) { return t[0]; }),
+                    datasets: [{ label: 'Created', data: data.timeline.map(function(t) { return t[1]; }), backgroundColor: '#3b82f6', borderRadius: 2 }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxRotation: 45 } }, y: { beginAtZero: true } } }
+            });
+        }
+
+        /* Type chart */
+        if (data.type_breakdown) {
+            new Chart(document.getElementById('type-chart'), {
+                type: 'doughnut',
+                data: { labels: Object.keys(data.type_breakdown), datasets: [{ data: Object.values(data.type_breakdown), backgroundColor: CHART_COLORS }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#d1d5db' } } } }
+            });
+        }
+
+        /* Project chart */
+        if (data.top_projects && data.top_projects.length > 0) {
+            new Chart(document.getElementById('project-chart'), {
+                type: 'bar',
+                data: { labels: data.top_projects.map(function(p) { return p[0]; }), datasets: [{ label: 'Memories', data: data.top_projects.map(function(p) { return p[1]; }), backgroundColor: '#a855f7', borderRadius: 4 }] },
+                options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
+            });
+        }
+
+        /* Sensitivity chart */
+        if (data.sensitivity) {
+            var senColors = { public: '#22c55e', internal: '#3b82f6', sensitive: '#f59e0b', restricted: '#ef4444' };
+            new Chart(document.getElementById('sensitivity-chart'), {
+                type: 'doughnut',
+                data: { labels: Object.keys(data.sensitivity), datasets: [{ data: Object.values(data.sensitivity), backgroundColor: Object.keys(data.sensitivity).map(function(k) { return senColors[k] || '#64748b'; }) }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#d1d5db' } } } }
+            });
+        }
+    } catch(e) {
+        console.error('Stats error:', e);
+    }
+
+    /* Graph stats */
+    try {
+        var gr = await fetch('/api/graph-data');
+        var gd = await gr.json();
+        var gs = document.getElementById('graph-stats');
+        gs.replaceChildren();
+        var p = document.createElement('p');
+        p.textContent = (gd.count || 0) + ' links connecting ' + (gd.nodes ? gd.nodes.length : 0) + ' memories. ';
+        var link = document.createElement('a');
+        link.href = '/graph';
+        link.textContent = 'View graph';
+        link.style.color = '#3b82f6';
+        p.appendChild(link);
+        gs.appendChild(p);
+
+        if (gd.edges && gd.edges.length > 0) {
+            var relCounts = {};
+            gd.edges.forEach(function(e) { var r = e.relationship || 'related'; relCounts[r] = (relCounts[r] || 0) + 1; });
+            var rp = document.createElement('p');
+            rp.style.cssText = 'font-size:12px;margin-top:6px';
+            var parts = [];
+            for (var rel in relCounts) parts.push(rel + ': ' + relCounts[rel]);
+            rp.textContent = parts.join(', ');
+            gs.appendChild(rp);
+        }
+    } catch(e) { /* graph non-critical */ }
+
+    /* Recent */
+    try {
+        var r = await fetch('/api/recent?limit=8');
+        var rd = await r.json();
+        var rl = document.getElementById('recent-list');
+        if (rl && rd.memories) {
+            rl.replaceChildren();
+            rd.memories.forEach(function(m) {
+                var row = document.createElement('div');
+                row.style.cssText = 'padding:6px 0;border-bottom:1px solid var(--border);font-size:12px';
+                row.appendChild(createText('span', m.type, 'tag tag-type'));
+                row.appendChild(document.createTextNode(' '));
+                row.appendChild(createText('span', m.project || 'global', 'tag tag-project'));
+                row.appendChild(document.createTextNode(' '));
+                var ds = createText('span', m.created_at ? m.created_at.slice(0, 10) : '');
+                ds.style.color = 'var(--text-muted)';
+                row.appendChild(ds);
+                var cd = document.createElement('div');
+                cd.style.cssText = 'margin-top:2px;color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+                cd.textContent = m.content || '';
+                row.appendChild(cd);
+                rl.appendChild(row);
+            });
+        }
+    } catch(e) { /* recent non-critical */ }
+
+    /* Top Accessed */
+    try {
+        var tal = document.getElementById('top-accessed-list');
+        if (tal && data && data.top_accessed && data.top_accessed.length > 0) {
+            tal.replaceChildren();
+            data.top_accessed.forEach(function(m) {
+                var row = document.createElement('div');
+                row.style.cssText = 'padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px';
+
+                var countBadge = createText('span', m.access_count + 'x', 'tag');
+                countBadge.style.cssText = 'background:' + (m.access_count >= 5 ? '#065f46' : '#1e3a5f') + ';color:' + (m.access_count >= 5 ? '#6ee7b7' : '#93c5fd') + ';min-width:36px;text-align:center';
+                row.appendChild(countBadge);
+
+                row.appendChild(createText('span', m.type, 'tag tag-type'));
+                if (m.is_meta) {
+                    var metaTag = createText('span', 'meta', 'tag');
+                    metaTag.style.cssText = 'background:#4c1d95;color:#c4b5fd';
+                    row.appendChild(metaTag);
+                }
+                row.appendChild(createText('span', m.project || 'global', 'tag tag-project'));
+
+                var content = document.createElement('span');
+                content.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)';
+                content.textContent = m.content || '';
+                row.appendChild(content);
+
+                tal.appendChild(row);
+            });
+        } else if (tal) {
+            tal.replaceChildren(createText('p', 'No accessed memories yet.', ''));
+        }
+    } catch(e) { /* top-accessed non-critical */ }
+}
+
+loadDashboard();
+</script>
+{% endblock %}

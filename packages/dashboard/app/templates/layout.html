@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Memory Dashboard{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface-hover: #242836;
+            --border: #2a2e3a;
+            --text: #e4e4e7;
+            --text-muted: #8b8d97;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #06b6d4;
+            --sidebar-w: 200px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+
+        .layout { display: flex; min-height: 100vh; }
+
+        /* Mobile top bar */
+        .topbar {
+            display: none;
+            position: fixed; top: 0; left: 0; right: 0;
+            height: 48px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            z-index: 200;
+            align-items: center;
+            padding: 0 16px;
+        }
+        .topbar-brand { font-size: 14px; font-weight: 600; color: var(--primary); }
+        .hamburger {
+            background: none; border: none; color: var(--text); font-size: 22px;
+            cursor: pointer; padding: 4px 8px; margin-right: 12px; line-height: 1;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: var(--sidebar-w);
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 16px 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 201;
+        }
+
+        .sidebar-brand {
+            padding: 0 16px 16px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 8px;
+        }
+        .sidebar-brand h1 { font-size: 15px; font-weight: 600; color: var(--primary); }
+        .sidebar-brand span { font-size: 11px; color: var(--text-muted); }
+
+        .nav-item {
+            display: block; padding: 9px 16px;
+            color: var(--text-muted); text-decoration: none;
+            font-size: 13px; transition: all 0.15s;
+        }
+        .nav-item:hover, .nav-item.active { background: var(--surface-hover); color: var(--text); }
+        .nav-item.active { border-left: 3px solid var(--primary); padding-left: 13px; }
+
+        .nav-section {
+            padding: 12px 16px 4px; font-size: 10px;
+            text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+        }
+
+        .sidebar-close {
+            display: none; background: none; border: none;
+            color: var(--text-muted); font-size: 20px; cursor: pointer;
+            position: absolute; top: 12px; right: 12px;
+        }
+
+        /* Overlay for mobile sidebar */
+        .sidebar-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5); z-index: 200;
+        }
+
+        /* Main content */
+        .main {
+            flex: 1;
+            margin-left: var(--sidebar-w);
+            padding: 20px 24px;
+            min-width: 0;
+            overflow-x: hidden;
+        }
+
+        .page-header {
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 8px;
+        }
+        .page-header h2 { font-size: 20px; font-weight: 600; }
+
+        /* Cards */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px; margin-bottom: 20px;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px; padding: 14px;
+            min-width: 0; overflow-x: auto;
+        }
+        .card-label {
+            font-size: 11px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 2px;
+        }
+        .card-value { font-size: 24px; font-weight: 700; }
+        .card-value.primary { color: var(--primary); }
+        .card-value.success { color: var(--success); }
+        .card-value.warning { color: var(--warning); }
+        .card-value.info { color: var(--info); }
+
+        /* Tables */
+        .table-wrap {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px; overflow-x: auto;
+            margin-bottom: 20px; -webkit-overflow-scrolling: touch;
+        }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+        th {
+            background: var(--surface-hover);
+            padding: 8px 12px; text-align: left; font-weight: 600;
+            font-size: 11px; text-transform: uppercase;
+            letter-spacing: 0.03em; color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 8px 12px; border-bottom: 1px solid var(--border);
+            max-width: 250px; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: var(--surface-hover); }
+
+        /* Tags */
+        .tag {
+            display: inline-block; padding: 2px 6px;
+            border-radius: 4px; font-size: 11px;
+            font-weight: 500; margin: 1px 2px; white-space: nowrap;
+        }
+        .tag-type { background: #1e3a5f; color: #60a5fa; }
+        .tag-project { background: #1a3d2e; color: #4ade80; }
+        .tag-default { background: #2a2e3a; color: #a1a1aa; }
+        .tag-sensitivity { background: #3b1e1e; color: #fca5a5; }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 7px 14px; border-radius: 6px; font-size: 13px;
+            font-weight: 500; border: none; cursor: pointer; transition: all 0.15s;
+        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+        .btn-ghost:hover { background: var(--surface-hover); color: var(--text); }
+        .btn-ghost.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+        /* Forms */
+        .input {
+            width: 100%; padding: 8px 12px;
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text); font-size: 13px;
+            outline: none; transition: border-color 0.15s;
+        }
+        .input:focus { border-color: var(--primary); }
+        select.input { appearance: none; cursor: pointer; }
+
+        /* Filter bar */
+        .filter-bar {
+            display: flex; gap: 8px; margin-bottom: 14px;
+            flex-wrap: wrap; align-items: center;
+        }
+        .filter-bar .input, .filter-bar select { width: auto; min-width: 120px; flex: 1 1 120px; }
+
+        /* Charts */
+        .chart-container {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px; margin-bottom: 20px;
+        }
+        .chart-container h3 { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text-muted); }
+
+        .chart-row {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 12px; margin-bottom: 20px;
+            min-width: 0;
+        }
+        .chart-row > * { min-width: 0; overflow: hidden; }
+
+        /* Pagination */
+        .pagination { display: flex; gap: 8px; justify-content: center; align-items: center; padding: 14px; }
+        .pagination .btn { padding: 6px 12px; }
+        .page-info { font-size: 13px; color: var(--text-muted); }
+
+        /* Search results */
+        .search-result {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 14px; margin-bottom: 10px;
+        }
+        .search-result .score { font-size: 13px; font-weight: 600; color: var(--primary); }
+        .search-result .content { margin-top: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+        .search-result .meta { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+
+        /* Loading */
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline-block; }
+        .spinner {
+            width: 16px; height: 16px;
+            border: 2px solid var(--border); border-top-color: var(--primary);
+            border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 100; padding: 16px;
+        }
+        .modal {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 20px;
+            max-width: 700px; width: 100%; max-height: 85vh; overflow-y: auto;
+        }
+        .modal h3 { margin-bottom: 12px; font-size: 16px; }
+        .modal pre {
+            background: var(--bg); padding: 12px; border-radius: 6px;
+            font-size: 12px; white-space: pre-wrap; word-break: break-word;
+            max-height: 350px; overflow-y: auto;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 1024px) {
+            .card-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+
+        @media (max-width: 768px) {
+            .topbar { display: flex; }
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.25s ease;
+                width: 240px;
+            }
+            .sidebar.open { transform: translateX(0); }
+            .sidebar-close { display: block; }
+            .sidebar-overlay.open { display: block; }
+
+            .main { margin-left: 0; padding: 64px 12px 16px; }
+            .chart-row { grid-template-columns: 1fr; }
+            .card-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .filter-bar .input, .filter-bar select { min-width: 100px; flex: 1 1 100px; }
+            .page-header h2 { font-size: 18px; }
+            td { max-width: 150px; padding: 6px 8px; }
+            th { padding: 6px 8px; }
+        }
+
+        @media (max-width: 480px) {
+            .card-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .card { padding: 10px; }
+            .card-value, .card div[style*="font-size:28px"], .card div[style*="font-size:32px"] {
+                font-size: 20px !important;
+            }
+            .filter-bar { gap: 6px; }
+            .filter-bar .input, .filter-bar select { min-width: 0; flex: 1 1 45%; font-size: 12px; padding: 6px 8px; }
+            table { font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Mobile top bar -->
+    <div class="topbar">
+        <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>
+        <span class="topbar-brand">Memory System</span>
+    </div>
+
+    <!-- Overlay -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+    <div class="layout">
+        <nav class="sidebar" id="sidebar">
+            <button class="sidebar-close" onclick="closeSidebar()">&times;</button>
+            <div class="sidebar-brand">
+                <h1>Memory System</h1>
+                <span>Claude Backend</span>
+            </div>
+            <div class="nav-section">Overview</div>
+            <a href="/" class="nav-item {% if active == 'dashboard' %}active{% endif %}" onclick="closeSidebar()">Dashboard</a>
+            <a href="/analytics" class="nav-item {% if active == 'analytics' %}active{% endif %}" onclick="closeSidebar()">Analytics</a>
+            <a href="/memories" class="nav-item {% if active == 'memories' %}active{% endif %}" onclick="closeSidebar()">Memories</a>
+            <a href="/search" class="nav-item {% if active == 'search' %}active{% endif %}" onclick="closeSidebar()">Search</a>
+            <div class="nav-section">Tiers &amp; Knowledge</div>
+            <a href="/tiers" class="nav-item {% if active == 'tiers' %}active{% endif %}" onclick="closeSidebar()">Tiers</a>
+            <a href="/knowledge" class="nav-item {% if active == 'knowledge' %}active{% endif %}" onclick="closeSidebar()">Knowledge</a>
+            <a href="/graph" class="nav-item {% if active == 'graph' %}active{% endif %}" onclick="closeSidebar()">Graph</a>
+            <a href="/decisions" class="nav-item {% if active == 'decisions' %}active{% endif %}" onclick="closeSidebar()">Decisions</a>
+            <div class="nav-section">Governance &amp; Sessions</div>
+            <a href="/governance" class="nav-item {% if active == 'governance' %}active{% endif %}" onclick="closeSidebar()">Governance</a>
+            <a href="/sessions" class="nav-item {% if active == 'sessions' %}active{% endif %}" onclick="closeSidebar()">Sessions</a>
+            <div class="nav-section">System</div>
+            <a href="/explorer" class="nav-item {% if active == 'explorer' %}active{% endif %}" onclick="closeSidebar()">Explorer</a>
+            <a href="/system" class="nav-item {% if active == 'system' %}active{% endif %}" onclick="closeSidebar()">System</a>
+        </nav>
+        <main class="main">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script>
+    function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('sidebar-overlay').classList.toggle('open');
+    }
+    function closeSidebar() {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebar-overlay').classList.remove('open');
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

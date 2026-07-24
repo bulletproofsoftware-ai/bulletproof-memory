@@ -1,0 +1,429 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Daily 1:00AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 1 * * *",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "scroll",
+      "name": "Scroll Memories",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"limit\":200,\"with_payload\":true,\"with_vector\":false}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/claude_memories/points/scroll"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "batch",
+      "name": "Build Batches",
+      "parameters": {
+        "jsCode": "const points = $input.first().json.result?.points || [];\nconst active = points.filter(p => p.payload?.status !== 'pruned' && p.payload?.status !== 'archived');\n\n// Check each memory against the tools API\nconst batches = [];\nfor (let i = 0; i < active.length; i += 20) {\n  const batch = active.slice(i, i + 20);\n  const contents = batch.map(p => ({\n    id: p.id,\n    content: (p.payload?.content || '').slice(0, 300),\n    type: p.payload?.type,\n    created: p.payload?.created_at\n  }));\n  batches.push({ json: { batch: contents, batch_index: i / 20 } });\n}\n\nif (!batches.length) return [{ json: { _empty: true } }];\nreturn batches;",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has_batches",
+      "name": "Has Batches",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json._empty }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "log_empty",
+      "name": "Log Empty",
+      "parameters": {
+        "jsCode": "return [{ json: { status: 'no_memories', contradictions: 0 } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        880,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "loop",
+      "name": "Loop Batches",
+      "parameters": {
+        "batchSize": 1
+      },
+      "position": [
+        880,
+        400
+      ],
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3
+    },
+    {
+      "id": "check",
+      "name": "Check Contradictions",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({tool:'contradiction_check',args:{operation:'detect',content:$json.batch.map(b=>b.content).join(' | ')}}) }}",
+        "method": "POST",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://mcp-server:5681/tools/call"
+      },
+      "position": [
+        1100,
+        400
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "collect",
+      "name": "Collect Results",
+      "parameters": {
+        "jsCode": "const result = $json.result?.content?.[0]?.text;\nlet parsed = {};\ntry { parsed = JSON.parse(result || '{}'); } catch {}\nreturn { json: { has_contradiction: parsed.has_contradiction || false, count: parsed.contradiction_count || 0, contradictions: (parsed.contradictions || []).slice(0, 5) } };",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1320,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "back_to_loop",
+      "name": "Back to Loop",
+      "parameters": {
+        "jsCode": "return { json: $json };",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1540,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "parameters": {
+        "jsCode": "const results = $('Collect Results').all();\nconst total = results.reduce((s, r) => s + (r.json.count || 0), 0);\nconst details = results.filter(r => r.json.has_contradiction).map(r => r.json.contradictions).flat().slice(0, 10);\nreturn [{ json: { status: 'completed', total_contradictions: total, details } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1100,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "embed_audit",
+      "name": "Embed Audit",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text',prompt:'contradiction check cycle: ' + $json.total_contradictions + ' found'}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        1320,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_audit",
+      "name": "Build Audit",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nif (!embedding) return { json: { error: 'no embedding' } };\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });\nlet summary;\ntry { summary = $('Summarize').first().json; } catch {}\nif (!summary) try { summary = $('Log Empty').first().json; } catch {}\nreturn { json: { point: { id: uuid, vector: embedding, payload: { action: 'CONTRADICTION_CHECK_CYCLE', timestamp: new Date().toISOString(), details: summary, sensitivity: 'internal', project: 'global' } } } };",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1540,
+        200
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_audit",
+      "name": "Store Audit",
+      "parameters": {
+        "authentication": "none",
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points"
+      },
+      "position": [
+        1760,
+        200
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Back to Loop": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Loop Batches",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Build Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Build Batches": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Has Batches",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Check Contradictions": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Collect Results",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Collect Results": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Back to Loop",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Daily 1:00AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Scroll Memories",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Has Batches": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Empty",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Loop Batches",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Log Empty": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Loop Batches": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Summarize",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Check Contradictions",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Scroll Memories": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Batches",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "0d33f4cd0430aabc",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Contradiction Check (Daily 1:00AM)"
+}

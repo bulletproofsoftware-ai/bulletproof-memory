@@ -1,0 +1,153 @@
+{% extends "layout.html" %}
+{% set active = "search" %}
+{% block title %}Search — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Semantic Search</h2>
+</div>
+
+<div style="margin-bottom: 24px;">
+    <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+        <input type="text" class="input" id="search-query" placeholder="Search your memories..." style="flex: 1;" onkeydown="if(event.key==='Enter') doSearch()">
+        <select class="input" id="search-collection" style="width: 220px;">
+            <option value="claude_memories">Memories</option>
+        </select>
+        <button class="btn btn-primary" onclick="doSearch()">Search</button>
+    </div>
+    <div style="display: flex; gap: 12px; align-items: center;">
+        <label style="font-size: 13px; color: var(--text-muted);">Threshold:</label>
+        <input type="range" id="search-threshold" min="0.3" max="0.95" step="0.05" value="0.5" oninput="document.getElementById('threshold-val').textContent = this.value">
+        <span id="threshold-val" style="font-size: 13px; color: var(--text-muted); min-width: 30px;">0.5</span>
+        <label style="font-size: 13px; color: var(--text-muted); margin-left: 16px;">Limit:</label>
+        <input type="number" class="input" id="search-limit" value="20" min="1" max="100" style="width: 80px;">
+    </div>
+</div>
+
+<div id="search-status" style="margin-bottom: 16px; font-size: 13px; color: var(--text-muted);"></div>
+<div id="search-results"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function createText(tag, text, className) {
+    var el = document.createElement(tag);
+    el.textContent = text || '';
+    if (className) el.className = className;
+    return el;
+}
+
+/* Populate the collection selector from the LIVE collection list so search
+   auto-covers any real collection (incl. obsidian_docs / file_search). Only
+   collections whose vector dimension matches the query embedder (768, nomic)
+   are offered, to avoid dimension-mismatch searches. */
+async function loadCollections() {
+    try {
+        var d = await (await fetch('/api/collections')).json();
+        var sel = document.getElementById('search-collection');
+        var cols = (d.collections || []).filter(function(c) {
+            return c.count > 0 && (c.vector_size == null || c.vector_size === 768);
+        });
+        if (!cols.length) return;
+        sel.replaceChildren();
+        var byGroup = {};
+        cols.forEach(function(c) { (byGroup[c.group] = byGroup[c.group] || []).push(c); });
+        Object.keys(byGroup).sort().forEach(function(g) {
+            var og = document.createElement('optgroup');
+            og.label = g;
+            byGroup[g].forEach(function(c) {
+                var o = document.createElement('option');
+                o.value = c.name;
+                o.textContent = c.label + ' (' + c.count.toLocaleString() + ')';
+                if (c.name === 'claude_memories') o.selected = true;
+                og.appendChild(o);
+            });
+            sel.appendChild(og);
+        });
+    } catch (e) { /* keep the default option */ }
+}
+
+async function doSearch() {
+    var query = document.getElementById('search-query').value.trim();
+    if (!query) return;
+
+    var collection = document.getElementById('search-collection').value;
+    var threshold = parseFloat(document.getElementById('search-threshold').value);
+    var limit = parseInt(document.getElementById('search-limit').value) || 20;
+
+    document.getElementById('search-status').textContent = 'Searching...';
+    document.getElementById('search-results').replaceChildren();
+
+    try {
+        var resp = await fetch('/api/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query, collection: collection, threshold: threshold, limit: limit })
+        });
+        var data = await resp.json();
+
+        if (data.error) {
+            document.getElementById('search-status').textContent = 'Error: ' + data.error;
+            return;
+        }
+
+        document.getElementById('search-status').textContent = data.count + ' results in ' + collection;
+
+        var container = document.getElementById('search-results');
+        container.replaceChildren();
+
+        data.results.forEach(function(r) {
+            var card = document.createElement('div');
+            card.className = 'search-result';
+
+            /* Header row: tags + score */
+            var header = document.createElement('div');
+            header.style.cssText = 'display:flex;justify-content:space-between;align-items:center';
+
+            var tagGroup = document.createElement('div');
+            tagGroup.appendChild(createText('span', r.type, 'tag tag-type'));
+            tagGroup.appendChild(document.createTextNode(' '));
+            tagGroup.appendChild(createText('span', r.project || 'global', 'tag tag-project'));
+            (r.tags || []).forEach(function(t) {
+                tagGroup.appendChild(document.createTextNode(' '));
+                tagGroup.appendChild(createText('span', t, 'tag tag-default'));
+            });
+            header.appendChild(tagGroup);
+
+            var score = createText('span', r.score.toFixed(4), 'score');
+            header.appendChild(score);
+            card.appendChild(header);
+
+            /* Score bar */
+            var barOuter = document.createElement('div');
+            barOuter.style.cssText = 'margin:6px 0;height:3px;background:var(--border);border-radius:2px';
+            var barInner = document.createElement('div');
+            var barWidth = Math.max(0, Math.min(100, (r.score - 0.3) / 0.7 * 100));
+            barInner.style.cssText = 'width:' + barWidth + '%;height:100%;background:var(--primary);border-radius:2px';
+            barOuter.appendChild(barInner);
+            card.appendChild(barOuter);
+
+            /* Content */
+            var content = document.createElement('div');
+            content.className = 'content';
+            content.textContent = r.content || '';
+            card.appendChild(content);
+
+            /* Meta */
+            var meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = r.created_at ? r.created_at.slice(0, 19) : '';
+            card.appendChild(meta);
+
+            container.appendChild(card);
+        });
+
+    } catch(e) {
+        document.getElementById('search-status').textContent = 'Search failed: ' + e.message;
+    }
+}
+
+loadCollections();
+document.getElementById('search-query').focus();
+</script>
+{% endblock %}

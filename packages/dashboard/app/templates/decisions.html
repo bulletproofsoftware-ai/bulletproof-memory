@@ -1,0 +1,225 @@
+{% extends "layout.html" %}
+{% set active = "decisions" %}
+{% block title %}Decisions — Memory System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Decisions</h2>
+    <span class="page-info" id="decisions-status">Loading...</span>
+</div>
+
+<div style="margin-bottom: 16px; display: flex; gap: 12px;">
+    <select id="project-filter" style="background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px;">
+        <option value="">All Projects</option>
+    </select>
+    <select id="status-filter" style="background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px;">
+        <option value="">All Statuses</option>
+        <option value="active">Active</option>
+        <option value="superseded">Superseded</option>
+        <option value="reversed">Reversed</option>
+    </select>
+</div>
+
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Project</th>
+                <th>Title</th>
+                <th>Impact</th>
+                <th>Status</th>
+                <th>Decided</th>
+                <th>Tags</th>
+            </tr>
+        </thead>
+        <tbody id="decisions-body"></tbody>
+    </table>
+    <div id="decisions-empty" style="display: none; padding: 32px; text-align: center; color: var(--text-muted);">
+        No decisions tracked yet. Store memories with type <code>decision</code> or tag <code>decision</code> to populate.
+    </div>
+</div>
+
+<div class="modal-overlay" id="decision-modal" style="display: none;">
+    <div class="modal">
+        <span style="float: right; cursor: pointer; font-size: 20px; color: var(--text-muted);" id="modal-close">&times;</span>
+        <h3 id="modal-title"></h3>
+        <div id="modal-body" style="margin-top: 12px;"></div>
+    </div>
+</div>
+
+<script>
+var projectFilter = document.getElementById('project-filter');
+var statusFilter = document.getElementById('status-filter');
+var modal = document.getElementById('decision-modal');
+var modalClose = document.getElementById('modal-close');
+
+modalClose.addEventListener('click', function() { modal.style.display = 'none'; });
+modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+
+function addRow(container, label, value) {
+    if (!value) return;
+    var row = document.createElement('div');
+    row.style.cssText = 'display: flex; padding: 8px 0; border-bottom: 1px solid var(--border);';
+
+    var labelEl = document.createElement('div');
+    labelEl.style.cssText = 'width: 140px; flex-shrink: 0; font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.03em;';
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+
+    var valueEl = document.createElement('div');
+    valueEl.style.cssText = 'flex: 1; font-size: 13px; white-space: pre-wrap; word-break: break-word;';
+    valueEl.textContent = value;
+
+    row.appendChild(valueEl);
+    container.appendChild(row);
+}
+
+async function loadDecisions() {
+    var statusEl = document.getElementById('decisions-status');
+    var tbody = document.getElementById('decisions-body');
+    var emptyEl = document.getElementById('decisions-empty');
+
+    var params = new URLSearchParams();
+    if (projectFilter.value) params.set('project', projectFilter.value);
+    if (statusFilter.value) params.set('status', statusFilter.value);
+
+    try {
+        var resp = await fetch('/api/decisions?' + params.toString());
+        var data = await resp.json();
+
+        if (data.error) {
+            statusEl.textContent = 'Decisions DB not connected';
+            statusEl.style.color = '#f87171';
+            emptyEl.style.display = 'block';
+            emptyEl.textContent = data.error;
+            return;
+        }
+
+        var decisions = data.decisions || [];
+        statusEl.textContent = decisions.length + ' decisions';
+
+        if (decisions.length === 0) {
+            emptyEl.style.display = 'block';
+            tbody.replaceChildren();
+            return;
+        }
+
+        emptyEl.style.display = 'none';
+        tbody.replaceChildren();
+
+        var projects = new Set();
+
+        for (var i = 0; i < decisions.length; i++) {
+            var d = decisions[i];
+            projects.add(d.project);
+
+            var tr = document.createElement('tr');
+            tr.style.cursor = 'pointer';
+
+            var projectTd = document.createElement('td');
+            projectTd.textContent = d.project || '';
+            tr.appendChild(projectTd);
+
+            var titleTd = document.createElement('td');
+            titleTd.textContent = (d.title || '').substring(0, 80);
+            tr.appendChild(titleTd);
+
+            var impactTd = document.createElement('td');
+            var impactSpan = document.createElement('span');
+            impactSpan.className = 'tag';
+            impactSpan.textContent = d.impact || 'medium';
+            if (d.impact === 'critical') impactSpan.style.background = '#7f1d1d';
+            else if (d.impact === 'high') impactSpan.style.background = '#78350f';
+            impactTd.appendChild(impactSpan);
+            tr.appendChild(impactTd);
+
+            var statusTd = document.createElement('td');
+            var statusSpan = document.createElement('span');
+            statusSpan.className = 'tag';
+            statusSpan.textContent = d.status || '';
+            if (d.status === 'active') statusSpan.style.background = '#064e3b';
+            else if (d.status === 'superseded') statusSpan.style.background = '#4a4a4a';
+            statusTd.appendChild(statusSpan);
+            tr.appendChild(statusTd);
+
+            var decidedTd = document.createElement('td');
+            decidedTd.textContent = d.decided_at ? d.decided_at.split('T')[0] : '';
+            tr.appendChild(decidedTd);
+
+            var tagsTd = document.createElement('td');
+            var tags = d.tags || [];
+            for (var k = 0; k < tags.length; k++) {
+                var tagSpan = document.createElement('span');
+                tagSpan.className = 'tag';
+                tagSpan.textContent = tags[k];
+                tagsTd.appendChild(tagSpan);
+            }
+            tr.appendChild(tagsTd);
+
+            (function(dec) {
+                tr.addEventListener('click', function() {
+                    document.getElementById('modal-title').textContent = dec.title || 'Decision';
+                    var body = document.getElementById('modal-body');
+                    body.textContent = '';
+
+                    addRow(body, 'Project', dec.project);
+                    addRow(body, 'Status', dec.status);
+                    addRow(body, 'Impact', dec.impact);
+                    addRow(body, 'Decided', dec.decided_at ? dec.decided_at.split('T')[0] : '');
+                    addRow(body, 'Decision', dec.decision);
+                    addRow(body, 'Rationale', dec.rationale);
+
+                    var alts = dec.alternatives_considered || [];
+                    if (alts.length > 0) {
+                        addRow(body, 'Alternatives', alts.join(', '));
+                    }
+
+                    var tags = dec.tags || [];
+                    if (tags.length > 0) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'display: flex; padding: 8px 0;';
+                        var labelEl = document.createElement('div');
+                        labelEl.style.cssText = 'width: 140px; flex-shrink: 0; font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.03em;';
+                        labelEl.textContent = 'Tags';
+                        row.appendChild(labelEl);
+                        var valueEl = document.createElement('div');
+                        valueEl.style.cssText = 'flex: 1;';
+                        for (var t = 0; t < tags.length; t++) {
+                            var tagSpan = document.createElement('span');
+                            tagSpan.className = 'tag';
+                            tagSpan.textContent = tags[t];
+                            valueEl.appendChild(tagSpan);
+                        }
+                        row.appendChild(valueEl);
+                        body.appendChild(row);
+                    }
+
+                    modal.style.display = 'flex';
+                });
+            })(d);
+
+            tbody.appendChild(tr);
+        }
+
+        // Populate project filter if empty
+        if (projectFilter.options.length <= 1) {
+            var sorted = Array.from(projects).sort();
+            for (var p = 0; p < sorted.length; p++) {
+                var opt = document.createElement('option');
+                opt.value = sorted[p];
+                opt.textContent = sorted[p];
+                projectFilter.appendChild(opt);
+            }
+        }
+
+    } catch (err) {
+        statusEl.textContent = 'Error';
+        statusEl.style.color = '#f87171';
+    }
+}
+
+projectFilter.addEventListener('change', loadDecisions);
+statusFilter.addEventListener('change', loadDecisions);
+loadDecisions();
+</script>
+{% endblock %}

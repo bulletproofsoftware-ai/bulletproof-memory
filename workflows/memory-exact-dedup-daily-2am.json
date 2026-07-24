@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "name": "Daily 2AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Dedup Cycle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Memory exact-duplicate sweep.\n// Removes byte-identical memories (same project + content) keeping the richest\n// copy, then prunes links orphaned by those deletes. Defense-in-depth behind\n// the deterministic-id fix in flush_insights.py (which prevents new exact dupes).\nconst QDRANT_URL = 'http://qdrant:6333';\nconst QDRANT_API_KEY = $env.QDRANT_API_KEY || '';\nconst COLLECTIONS = ['claude_memories', 'memories_warm', 'memories_hot'];\n// types that must never be deleted even if duplicated\nconst PROTECTED_TYPES = new Set(['procedure', 'learning', 'trajectory']);\n\nasync function scrollAll(collection) {\n  let out = [], offset = null;\n  while (true) {\n    const body = { limit: 1000, with_payload: true, with_vector: false };\n    if (offset) body.offset = offset;\n    const d = await helpers.httpRequest({\n      method: 'POST',\n      headers: { 'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json' },\n      body: JSON.stringify(body),\n      url: `${QDRANT_URL}/collections/${collection}/points/scroll`,\n      json: true,\n    });\n    const res = d.result || {};\n    out = out.concat(res.points || []);\n    offset = res.next_page_offset;\n    if (!offset) break;\n  }\n  return out;\n}\n\nasync function deleteIds(collection, ids) {\n  // wait=true: force synchronous application; 'acknowledged' deletes can be\n  // dropped silently (2026-07-03 incident: sweep reported 20k deleted, ~6k applied)\n  for (let i = 0; i < ids.length; i += 500) {\n    const chunk = ids.slice(i, i + 500).map(String);\n    const res = await helpers.httpRequest({\n      method: 'POST',\n      headers: { 'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json' },\n      body: JSON.stringify({ points: chunk }),\n      url: `${QDRANT_URL}/collections/${collection}/points/delete?wait=true`,\n      json: true,\n    });\n    const st = res && res.result && res.result.status;\n    if (st !== 'completed') throw new Error(`delete batch not completed (status=${st})`);\n  }\n}\n\nasync function exactCount(collection) {\n  const d = await helpers.httpRequest({\n    method: 'POST',\n    headers: { 'api-key': QDRANT_API_KEY, 'Content-Type': 'application/json' },\n    body: JSON.stringify({ exact: true }),\n    url: `${QDRANT_URL}/collections/${collection}/points/count`,\n    json: true,\n  });\n  return d.result.count;\n}\n\n// rank tuple: higher is better (pinned, verified, more tags, newer)\nfunction rank(pl) {\n  return [pl.pinned ? 1 : 0, pl.last_verified_date || '', (pl.tags || []).length, pl.created_at || ''];\n}\nfunction cmpDesc(a, b) {\n  const ra = rank(a.payload || {}), rb = rank(b.payload || {});\n  for (let i = 0; i < ra.length; i++) {\n    if (ra[i] < rb[i]) return 1;\n    if (ra[i] > rb[i]) return -1;\n  }\n  return String(a.id) < String(b.id) ? 1 : -1;\n}\n\nconst summary = { ts: new Date().toISOString(), deleted: {}, links_deleted: 0, errors: [] };\nconst deletedAll = new Set();\n\nfor (const coll of COLLECTIONS) {\n  try {\n    const pts = await scrollAll(coll);\n    const groups = new Map();\n    for (const p of pts) {\n      const pl = p.payload || {};\n      const content = pl.content || pl.text || '';\n      if (!content) continue; // never collapse empty-content rows\n      const key = (pl.project || '(none)') + '\\u0000' + content;\n      if (!groups.has(key)) groups.set(key, []);\n      groups.get(key).push(p);\n    }\n    const del = [];\n    for (const members of groups.values()) {\n      if (members.length <= 1) continue;\n      members.sort(cmpDesc); // best first\n      for (let i = 1; i < members.length; i++) {\n        const pl = members[i].payload || {};\n        if (pl.pinned) continue;\n        if (PROTECTED_TYPES.has(pl.type)) continue;\n        del.push(members[i].id);\n      }\n    }\n    const before = await exactCount(coll);\n    if (del.length) await deleteIds(coll, del);\n    del.forEach((id) => deletedAll.add(String(id)));\n    const after = await exactCount(coll);\n    // report VERIFIED deletions, not intended ones; flag any shortfall\n    summary.deleted[coll] = before - after;\n    if (before - after !== del.length) {\n      summary.errors.push(`${coll}: intended ${del.length} deletes but count only dropped ${before - after}`);\n    }\n  } catch (e) {\n    summary.errors.push(`${coll}: ${e.message}`);\n  }\n}\n\n// Prune links orphaned by this run's deletions (keeps the knowledge graph clean).\ntry {\n  if (deletedAll.size) {\n    const links = await scrollAll('memory_links');\n    const orphan = links\n      .filter((l) => {\n        const pl = l.payload || {};\n        return deletedAll.has(String(pl.source_id)) || deletedAll.has(String(pl.target_id));\n      })\n      .map((l) => l.id);\n    if (orphan.length) await deleteIds('memory_links', orphan);\n    summary.links_deleted = orphan.length;\n  }\n} catch (e) {\n  summary.errors.push(`memory_links: ${e.message}`);\n}\n\nreturn [{ json: summary }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Daily 2AM": {
+      "main": [
+        [
+          {
+            "node": "Dedup Cycle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "id": "fa2a2b63da735cb4",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Exact-Dedup Sweep (Daily 2AM)"
+}

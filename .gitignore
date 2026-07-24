@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+packages/*/node_modules/
+
+# Build output
+dist/
+packages/*/dist/
+
+# Environment & secrets
+.env
+.env.local
+*.pem
+*.key
+keys/
+
+# Local data
+data/*.sqlite
+data/*.json
+!data/.gitkeep
+*.db
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# OS
+.DS_Store
+*.log

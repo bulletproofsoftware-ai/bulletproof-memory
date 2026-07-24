@@ -1,0 +1,236 @@
+{
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Weekly Fri 7AM",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "expression": "0 7 * * 5",
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "call_overall",
+      "name": "Call Compliance Overall",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"tool\":\"compliance_dashboard\",\"args\":{\"operation\":\"overall\"}}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://mcp-server:5681/tools/call"
+      },
+      "position": [
+        220,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "call_gaps",
+      "name": "Call Compliance Gaps",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "{\"tool\":\"compliance_dashboard\",\"args\":{\"operation\":\"gaps\"}}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://mcp-server:5681/tools/call"
+      },
+      "position": [
+        440,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "parse_result",
+      "name": "Combine Results",
+      "parameters": {
+        "jsCode": "const overallRaw = $('Call Compliance Overall').first().json;\nconst gapsRaw = $input.first().json;\nconst overall = overallRaw.content || overallRaw.result || overallRaw;\nconst gaps = gapsRaw.content || gapsRaw.result || gapsRaw;\nconst overallStr = typeof overall === 'string' ? overall : JSON.stringify(overall).substring(0, 300);\nconst gapsStr = typeof gaps === 'string' ? gaps : JSON.stringify(gaps).substring(0, 300);\n\nreturn [{ json: {\n  action: 'COMPLIANCE_DASHBOARD',\n  tool: 'compliance_dashboard',\n  overall_summary: overallStr,\n  gaps_summary: gapsStr,\n  summary: 'Overall: ' + overallStr.substring(0, 200) + ' | Gaps: ' + gapsStr.substring(0, 200),\n  timestamp: new Date().toISOString(),\n  source: 'n8n_scheduled'\n}}];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        660,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "embed_audit",
+      "name": "Embed Audit",
+      "parameters": {
+        "contentType": "json",
+        "jsonBody": "={{ JSON.stringify({model:'nomic-embed-text', prompt: 'compliance dashboard overall gaps ' + $json.summary.substring(0, 200)}) }}",
+        "method": "POST",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "http://ollama:11434/api/embeddings"
+      },
+      "position": [
+        880,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build_audit",
+      "name": "Build Audit Point",
+      "parameters": {
+        "jsCode": "const embedding = $json.embedding;\nconst parsed = $('Combine Results').first().json;\nif (!embedding) return { json: { error: 'no embedding' } };\n\nconst uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {\n  const r = Math.random() * 16 | 0;\n  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);\n});\n\nreturn {\n  json: {\n    point: {\n      id: uuid,\n      vector: embedding,\n      payload: {\n        action: parsed.action,\n        tool: parsed.tool,\n        overall_summary: parsed.overall_summary,\n        gaps_summary: parsed.gaps_summary,\n        timestamp: parsed.timestamp,\n        source: parsed.source\n      }\n    }\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "store_audit",
+      "name": "Store Audit",
+      "parameters": {
+        "contentType": "json",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.QDRANT_API_KEY }}"
+            }
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({points:[$json.point]}) }}",
+        "method": "PUT",
+        "options": {},
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "specifyHeaders": "keypair",
+        "url": "http://qdrant:6333/collections/audit_log/points"
+      },
+      "position": [
+        1320,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    }
+  ],
+  "connections": {
+    "Build Audit Point": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Store Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Call Compliance Gaps": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Combine Results",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Call Compliance Overall": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Call Compliance Gaps",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Combine Results": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Embed Audit",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Embed Audit": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build Audit Point",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Weekly Fri 7AM": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Call Compliance Overall",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "id": "d2b429ba93ae3b1b",
+  "settings": {
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "name": "Memory: Compliance Dashboard (Weekly Fri 7AM)"
+}

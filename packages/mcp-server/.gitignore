@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment & secrets
+.env
+.env.local
+*.pem
+*.key
+keys/
+
+# Local data
+data/
+*.sqlite
+*.db
+
+# OS / editor
+.DS_Store
+*.tgz
+*.log
+
+# Test / cache
+coverage/
+.vitest/
