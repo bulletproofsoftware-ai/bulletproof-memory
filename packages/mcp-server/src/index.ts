@@ -942,9 +942,12 @@ function generateUUID(): string {
   });
 }
 
-// Deterministic UUID from a string key (for scratch pad IDs)
+// Deterministic UUID from a string key (for scratch pad IDs).
+// Uses SHA-256 (not MD5) and takes the first 32 hex chars for the UUID layout —
+// this is an ID-derivation, not a security hash, but SHA-256 avoids the broken-hash
+// warning and costs nothing here.
 function keyToUUID(key: string): string {
-  const hash = createHash('md5').update(key).digest('hex');
+  const hash = createHash('sha256').update(key).digest('hex').slice(0, 32);
   return [
     hash.slice(0, 8),
     hash.slice(8, 12),

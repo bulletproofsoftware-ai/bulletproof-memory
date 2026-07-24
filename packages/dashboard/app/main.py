@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import asyncpg
 import httpx
 import yaml
-from fastapi import FastAPI, Query, Request, Form, Depends
+from fastapi import FastAPI, Query, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer
@@ -1179,8 +1179,11 @@ async def api_decisions(
         params.append(status)
         idx += 1
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    query = f"SELECT * FROM memory_decisions{where} ORDER BY decided_at DESC LIMIT 1000"
-    count_query = f"SELECT count(*) FROM memory_decisions{where}"
+    # `where` is composed only of hardcoded column predicates ("project = $1", ...);
+    # all user values are bound as $1/$2 params below, so no user input is interpolated
+    # into the SQL string. Safe by construction.
+    query = f"SELECT * FROM memory_decisions{where} ORDER BY decided_at DESC LIMIT 1000"  # nosec B608
+    count_query = f"SELECT count(*) FROM memory_decisions{where}"  # nosec B608
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, *params)
         total = await conn.fetchval(count_query, *params)

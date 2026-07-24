@@ -125,9 +125,10 @@ async def api_pg2_table(
     if not await discovery.pg_table_exists(pool, schema, table):
         return JSONResponse({"error": "Unknown table"}, status_code=404)
     offset = (page - 1) * page_size
-    # identifiers validated by regex AND existence-checked against information_schema
-    sql = f'SELECT * FROM "{schema}"."{table}" LIMIT $1 OFFSET $2'
-    count_sql = f'SELECT count(*) FROM "{schema}"."{table}"'
+    # identifiers validated by regex (validate_pg_identifier) AND existence-checked
+    # against information_schema above; values are bound as $1/$2. Safe by construction.
+    sql = f'SELECT * FROM "{schema}"."{table}" LIMIT $1 OFFSET $2'  # nosec B608
+    count_sql = f'SELECT count(*) FROM "{schema}"."{table}"'  # nosec B608
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, page_size, offset)
         total = await conn.fetchval(count_sql)
