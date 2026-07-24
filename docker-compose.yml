@@ -62,6 +62,13 @@ services:
       N8N_PROTOCOL: http
       GENERIC_TIMEZONE: ${TZ:-UTC}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-changeme-encryption-key}
+      # API key the Claude Memory Gateway webhook validates (x-api-key header).
+      WEBHOOK_API_KEY: ${WEBHOOK_API_KEY:-changeme-webhook-key}
+      # The gateway workflow reads $env.WEBHOOK_API_KEY in an expression;
+      # n8n 2.x denies $env access in expressions unless this is disabled.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # The gateway's Qdrant store/search nodes authenticate with this key.
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432

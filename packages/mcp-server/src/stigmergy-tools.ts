@@ -15,7 +15,7 @@ async function qdrantFetch(path: string, opts: RequestInit = {}): Promise<Record
 
 async function embed(text: string): Promise<number[]> {
   const ollamaUrl = process.env.OLLAMA_HOST || 'http://localhost:11434';
-  const model = process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
+  const model = process.env.EMBED_MODEL || process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
   const resp = await fetch(`${ollamaUrl}/api/embeddings`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

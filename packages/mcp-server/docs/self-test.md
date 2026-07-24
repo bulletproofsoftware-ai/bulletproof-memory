@@ -13,9 +13,6 @@ harness-level fatal.
 
 **NEW in v1.1:** The governance category (`G1–G5`) tests the governance HTTP bridge, which now requires a dedicated `GOVERNANCE_API_KEY` environment variable (it no longer falls back to `QDRANT_API_KEY`). If the `governance` test shows FAIL, check that `GOVERNANCE_API_KEY` is set. See [DEPLOYMENT.md](DEPLOYMENT.md#breaking-change-governance_api_key-v11).
 
-> **Canonical repo copy.** A readable mirror belongs in `Obsidian/Projects/claude-memory-mcp/`
-> per the repo's docs-to-Obsidian rule. The repo copy is the source of truth.
-
 ## How to run
 
 ```bash

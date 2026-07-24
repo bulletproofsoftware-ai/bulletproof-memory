@@ -23,7 +23,7 @@ if [ ! -f .env ]; then
   cp .env.example .env
   echo "   A default .env was created. For production, edit it and set:"
   echo "     QDRANT_API_KEY, MEMPG_PASSWORD, DASHBOARD_PASS_HASH, SESSION_SECRET,"
-  echo "     N8N_ENCRYPTION_KEY, GOVERNANCE_HTTP_TOKEN"
+  echo "     N8N_ENCRYPTION_KEY, GOVERNANCE_API_KEY"
 fi
 
 # 3. Bring up the stack
@@ -51,6 +51,14 @@ say "Importing memory workflows into n8n"
 # Give n8n a moment to finish first-boot migrations.
 sleep 15
 bash workflows/import-workflows.sh || echo "   (workflow import had issues — see n8n UI at the n8n port)"
+
+# 6b. Restart n8n so the imported webhook workflows register their endpoints,
+# then seed the DRM-canary fixture memories the weekly canary probes against.
+say "Registering webhooks and seeding DRM-canary fixtures"
+$DOCKER compose restart n8n >/dev/null 2>&1 || true
+sleep 20
+bash init/seed-canary-fixtures.sh || \
+  echo "   (canary fixture seeding failed — re-run init/seed-canary-fixtures.sh once the stack is fully up)"
 
 # 7. Done
 say "Install complete"

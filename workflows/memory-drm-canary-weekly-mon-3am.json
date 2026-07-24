@@ -24,7 +24,7 @@
       "id": "load_pairs",
       "name": "Load Canary Pairs",
       "parameters": {
-        "jsCode": "// In-workflow constant \u2014 for production, load from /scripts/migrations/stage-10/canary-pairs.json via filesystem read if n8n's executeWorkflow context allows.\n// For now we inline the pairs (kept short for workflow visibility).\nconst CASES = [\n  { id: 'drm-001', query: 'infrastructure SSH alias hg', expected_top_substr: 'hg' },\n  { id: 'drm-002', query: 'Qdrant vector dimensions', expected_top_substr: '768' },\n  { id: 'drm-003', query: 'claude-memory-postgres container port', expected_top_substr: '5438' },\n  { id: 'drm-004', query: 'n8n claude-memory gateway endpoint', expected_top_substr: '5679' },\n  { id: 'drm-005', query: 'Stage 8 dual-write feature flag', expected_top_substr: 'STAGE_8_DUAL_WRITE' },\n  { id: 'drm-006', query: 'frontend designer agent purpose', expected_top_substr: 'frontend-designer' },\n  { id: 'drm-007', query: 'memory_recall hot tier threshold', expected_top_substr: 'hot' },\n  { id: 'drm-008', query: 'Memgraph bolt port', expected_top_substr: '7687' },\n  { id: 'drm-009', query: 'BRD-tracker workflow gates', expected_top_substr: 'gate' },\n  { id: 'drm-010', query: 'Marc conductor process steps mandatory', expected_top_substr: 'process' },\n];\nconst runId = `drm-${new Date().toISOString().slice(0,10)}-${Math.floor(Math.random()*10000)}`;\nreturn CASES.map(c => ({ json: { ...c, canary_run_id: runId } }));"
+        "jsCode": "// Install-agnostic DRM canary pairs. Each probe targets a fixture memory\n// seeded by init/seed-canary-fixtures.sh (run once after workflow import),\n// so a fresh install can satisfy every case.\nconst CASES = [\n  { id: 'drm-001', query: 'what model embeds content in the memory system', expected_top_substr: 'nomic-embed-text' },\n  { id: 'drm-002', query: 'vector dimensions of the memory embeddings', expected_top_substr: '768' },\n  { id: 'drm-003', query: 'memory tier levels hot warm cold', expected_top_substr: 'hot' },\n  { id: 'drm-004', query: 'Memgraph bolt protocol port', expected_top_substr: '7687' },\n  { id: 'drm-005', query: 'primary Qdrant collection storing memories', expected_top_substr: 'claude_memories' },\n  { id: 'drm-006', query: 'nightly consolidation of episodic memories', expected_top_substr: 'consolidation' },\n  { id: 'drm-007', query: 'full-text search over session transcripts', expected_top_substr: 'tsvector' },\n  { id: 'drm-008', query: 'weekly probe that measures recall accuracy', expected_top_substr: 'canary' },\n  { id: 'drm-009', query: 'the service that generates embeddings for memory storage and recall', expected_top_substr: 'ollama' },\n  { id: 'drm-010', query: 'table that records canary run results', expected_top_substr: 'memory_health' },\n];\nconst runId = `drm-${new Date().toISOString().slice(0,10)}-${Math.floor(Math.random()*10000)}`;\nreturn CASES.map(c => ({ json: { ...c, canary_run_id: runId } }));"
       },
       "position": [
         220,
@@ -43,10 +43,14 @@
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.WEBHOOK_API_KEY }}"
             }
           ]
         },
-        "jsonBody": "={{ JSON.stringify({ tool: 'memory_recall', args: { query: $json.query, limit: 3, include_all_projects: true } }) }}",
+        "jsonBody": "={{ JSON.stringify({ action: 'recall', query: $json.query, limit: 3 }) }}",
         "method": "POST",
         "options": {
           "response": {
@@ -59,7 +63,7 @@
         "sendBody": true,
         "sendHeaders": true,
         "specifyBody": "json",
-        "url": "http://n8n:5678/claude-memory-gateway"
+        "url": "http://n8n:5678/webhook/memory"
       },
       "position": [
         440,

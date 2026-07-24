@@ -23,16 +23,25 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
               "id": "api-key-check",
-              "leftValue": "={{ $json.headers['x-api-key'] }}",
-              "rightValue": "={{ $env.WEBHOOK_API_KEY }}",
+              "leftValue": "={{ String($json.headers['x-api-key'] ?? '') }}",
+              "rightValue": "={{ String($env.WEBHOOK_API_KEY ?? '') }}",
               "operator": {
                 "type": "string",
                 "operation": "equals"
+              }
+            },
+            {
+              "id": "api-key-nonempty",
+              "leftValue": "={{ String($env.WEBHOOK_API_KEY ?? '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
               }
             }
           ],

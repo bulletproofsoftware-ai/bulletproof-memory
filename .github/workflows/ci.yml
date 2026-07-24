@@ -14,3 +14,6 @@ jobs:
         with: { node-version: '20' }
       - run: npm install
       - run: npm run build
+      # tests/memory-migration asserts against historical migration scripts that
+      # are not shipped in this repo — excluded until they are vendored or removed.
+      - run: npx vitest run --exclude "tests/memory-migration/**"

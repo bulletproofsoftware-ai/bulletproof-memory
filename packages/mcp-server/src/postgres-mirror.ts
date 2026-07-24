@@ -44,7 +44,7 @@ function buildPoolConfig(): PoolConfig {
   const database = readEnv("CLAUDE_MEMORY_PG_DB");
   const password = readEnv("CLAUDE_MEMORY_PG_PASSWORD");
   const host = process.env.CLAUDE_MEMORY_PG_HOST || "127.0.0.1";
-  const portStr = process.env.CLAUDE_MEMORY_PG_PORT || "5438";
+  const portStr = process.env.CLAUDE_MEMORY_PG_PORT || "5432";
   const port = Number.parseInt(portStr, 10);
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     throw new Error(`postgres-mirror: invalid CLAUDE_MEMORY_PG_PORT ${portStr}`);
