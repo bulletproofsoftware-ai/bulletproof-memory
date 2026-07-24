@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { graphStore, graphQuery, graphTraverse, graphNeighbors, graphPath, graphTimeTravel } from "./graph-tools.js";
 import { stigmergyDeposit, stigmergySense, stigmergyDecay } from "./stigmergy-tools.js";
-import { createHash, timingSafeEqual } from "crypto";
+import { createHash, timingSafeEqual, randomBytes, randomUUID } from "crypto";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
 import { join, dirname } from "path";
@@ -343,7 +343,7 @@ export function computeExactTokenBoost(content: string | undefined, rareTokens: 
 }
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const SESSION_ID = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const SESSION_ID = `session_${Date.now()}_${randomBytes(4).toString("hex")}`;
 const GOVERNANCE_HTTP_PORT = parseInt(process.env.GOVERNANCE_HTTP_PORT || "5681");
 // Dedicated secret — deliberately does NOT fall back to QDRANT_API_KEY. This server is
 // bound to 0.0.0.0 (LAN-reachable, required for Docker-container callers like n8n), so
@@ -933,13 +933,9 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
   }
 }
 
-// Helper function to generate UUID
+// Helper function to generate a UUID (v4, cryptographically random).
 function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
+  return randomUUID();
 }
 
 // Deterministic UUID from a string key (for scratch pad IDs).

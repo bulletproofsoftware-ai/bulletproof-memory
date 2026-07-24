@@ -51,5 +51,8 @@
   "homepage": "https://github.com/bulletproofsoftware-ai/bulletproof-memory#readme",
   "bugs": {
     "url": "https://github.com/bulletproofsoftware-ai/bulletproof-memory/issues"
+  },
+  "overrides": {
+    "@hono/node-server": "^2.0.5"
   }
 }
