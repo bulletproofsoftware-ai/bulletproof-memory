@@ -18,7 +18,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^12.11.1",
-    "neo4j-driver": "^5.28.3",
+    "neo4j-driver": "^6.2.0",
     "zod": "^3.23.0",
     "pg": "^8.20.0"
   },
