@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:0f24e508-1087-43d4-9a95-a0605a2904e4",
+  "serialNumber": "urn:uuid:2be99083-8b9a-473e-a171-89b3f5b464dc",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-24T18:00:27.884Z",
+    "timestamp": "2026-07-24T19:13:51.513Z",
     "lifecycles": [
       {
         "phase": "build"
@@ -53,23 +53,23 @@
   },
   "components": [
     {
-      "bom-ref": "@hono/node-server@1.19.14",
+      "bom-ref": "@hono/node-server@2.0.11",
       "type": "library",
       "name": "@hono/node-server",
-      "version": "1.19.14",
+      "version": "2.0.11",
       "scope": "required",
       "author": "Yusuke Wada <yusuke@kamawada.com> (https://github.com/yusukebe)",
       "description": "Node.js Adapter for Hono",
-      "purl": "pkg:npm/%40hono/node-server@1.19.14",
+      "purl": "pkg:npm/%40hono/node-server@2.0.11",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.14.tgz"
+          "url": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.0.11.tgz"
         },
         {
           "type": "vcs",
-          "url": "https://github.com/honojs/node-server.git"
+          "url": "git+https://github.com/honojs/node-server.git"
         },
         {
           "type": "website",
@@ -79,7 +79,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "1b0b6f82d5f19d6b2e717bdb41791182a92c887d9079ddfb1fdc47668704e6c03737c3bc3bcffc140dee725417c5757373d5c166e10e30aefeaf4d85992a47b7"
+          "content": "6e30f6db528f2e8253594c2ca3527a7c62a24d711415e746fecd2f8ac6af638cda9053e4786511311365cbe161047b3b4fc0f3e2a1da648317f59a091d226d28"
         }
       ],
       "licenses": [
@@ -4998,7 +4998,7 @@
       ]
     },
     {
-      "ref": "@hono/node-server@1.19.14",
+      "ref": "@hono/node-server@2.0.11",
       "dependsOn": [
         "hono@4.12.31"
       ]
@@ -5006,7 +5006,7 @@
     {
       "ref": "@modelcontextprotocol/sdk@1.29.0",
       "dependsOn": [
-        "@hono/node-server@1.19.14",
+        "@hono/node-server@2.0.11",
         "ajv@8.20.0",
         "ajv-formats@3.0.1",
         "content-type@1.0.5",

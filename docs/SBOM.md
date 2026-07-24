@@ -77,7 +77,7 @@ Pinned in [`packages/dashboard/app/requirements.txt`](../packages/dashboard/app/
 | `jinja2` | 3.1.6 | BSD-3-Clause | HTML templating |
 | `pyyaml` | 6.0.2 | MIT | Config parsing (`config.yaml`) |
 | `asyncpg` | 0.30.0 | Apache-2.0 | Async Postgres driver |
-| `python-multipart` | 0.0.20 | Apache-2.0 | Form parsing |
+| `python-multipart` | 0.0.32 | Apache-2.0 | Form parsing |
 | `itsdangerous` | 2.2.0 | BSD-3-Clause | Session-cookie signing |
 
 **All permissive** (MIT / BSD-3-Clause / Apache-2.0). Exact pinning means reproducible
