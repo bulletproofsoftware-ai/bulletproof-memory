@@ -6,6 +6,12 @@ A complete, self-hostable memory system for AI agents: an MCP server with semant
 recall, a web dashboard, and the scheduled maintenance workflows that keep it healthy.
 One clone, one command, and it runs.
 
+![bulletproof-memory — tiered memory system for AI agents](docs/media/infographic.png)
+
+> 📊 A [system-overview slide deck](media/system-overview-deck.pdf) and
+> [explainer video](media/system-overview.mp4) are in [`media/`](media/); full
+> documentation (install, admin, how-to, SBOM, signed scan report) is in [`docs/`](docs/).
+
 ## What's in here
 
 | Path | What it is |
