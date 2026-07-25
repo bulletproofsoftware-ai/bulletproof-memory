@@ -778,7 +778,7 @@ const BenchmarkSchema = z.object({
   success: z.boolean().optional().describe("Whether task succeeded"),
   duration_ms: z.number().optional().describe("Execution duration in milliseconds"),
   tokens_used: z.number().optional().describe("Tokens consumed"),
-  metadata: z.record(z.unknown()).optional().describe("Additional metadata"),
+  metadata: z.record(z.string(), z.unknown()).optional().describe("Additional metadata"),
   query: z.string().optional().describe("Query for searching benchmarks"),
   limit: z.number().optional().default(10).describe("Number of results"),
 });
@@ -810,7 +810,7 @@ const ProcedureSchema = z.object({
   // For search/apply
   procedure_id: z.string().optional().describe("Procedure ID"),
   query: z.string().optional().describe("Search query"),
-  context: z.record(z.string()).optional().describe("Context variables for template substitution"),
+  context: z.record(z.string(), z.string()).optional().describe("Context variables for template substitution"),
   limit: z.number().optional().default(3).describe("Number of results"),
   // For feedback
   success: z.boolean().optional().describe("Whether procedure application succeeded"),
@@ -835,7 +835,7 @@ const TrajectorySchema = z.object({
   key_decisions: z.array(z.string()).optional().describe("Important decisions made"),
   outcome: z.object({
     success: z.boolean(),
-    metrics: z.record(z.unknown()).optional(),
+    metrics: z.record(z.string(), z.unknown()).optional(),
   }).optional().describe("Task outcome"),
   // For recall
   query: z.string().optional().describe("Search query for similar trajectories"),
@@ -5255,7 +5255,7 @@ server.tool(
     recording_id: z.string().optional().describe("Recording ID"),
     replay_id: z.string().optional().describe("Replay ID"),
     tool_name: z.string().optional().describe("Tool name (for record_call)"),
-    parameters: z.record(z.unknown()).optional().describe("Tool parameters (for record_call)"),
+    parameters: z.record(z.string(), z.unknown()).optional().describe("Tool parameters (for record_call)"),
     response: z.unknown().optional().describe("Tool response (for record_call)"),
     step_number: z.number().optional().describe("Step number (for modify_step)"),
     modification_type: z.enum(["response_override", "parameter_override", "skip", "inject"]).optional().describe("Type of modification"),
@@ -5264,7 +5264,7 @@ server.tool(
     modified_id: z.string().optional().describe("Modified replay/recording ID (for compare)"),
     limit: z.number().optional().default(20).describe("Result limit"),
     actual_tool_name: z.string().optional().describe("Actual tool name during replay (for divergence detection)"),
-    actual_params: z.record(z.unknown()).optional().describe("Actual parameters during replay (for divergence detection)"),
+    actual_params: z.record(z.string(), z.unknown()).optional().describe("Actual parameters during replay (for divergence detection)"),
   }).shape,
   async (args) => {
     if (!timeTravelDebugger) {
@@ -5488,9 +5488,9 @@ server.tool(
       "compile", "verify", "full_verify", "get_certificate",
       "list_verifications", "verify_certificate",
     ]).describe("Verification operation to perform"),
-    workflow: z.record(z.unknown()).optional().describe("Conductor workflow JSON (for compile/verify/full_verify)"),
-    spec: z.record(z.unknown()).optional().describe("Compiled WorkflowSpec (for verify)"),
-    certificate: z.record(z.unknown()).optional().describe("VerificationCertificate (for verify_certificate)"),
+    workflow: z.record(z.string(), z.unknown()).optional().describe("Conductor workflow JSON (for compile/verify/full_verify)"),
+    spec: z.record(z.string(), z.unknown()).optional().describe("Compiled WorkflowSpec (for verify)"),
+    certificate: z.record(z.string(), z.unknown()).optional().describe("VerificationCertificate (for verify_certificate)"),
     workflow_hash: z.string().optional().describe("Workflow source hash (for get_certificate cache lookup)"),
     limit: z.number().optional().default(20).describe("Result limit for list_verifications"),
   }).shape,
@@ -5651,12 +5651,12 @@ server.tool(
       "promotion_report", "list_scenarios", "get_sandbox",
     ]).describe("Digital twin operation to perform"),
     agent_id: z.string().optional().describe("Agent ID (for create_snapshot)"),
-    snapshot: z.record(z.unknown()).optional().describe("SandboxState snapshot (for create_sandbox)"),
+    snapshot: z.record(z.string(), z.unknown()).optional().describe("SandboxState snapshot (for create_sandbox)"),
     snapshot_id: z.string().optional().describe("Snapshot ID (for create_sandbox)"),
     sandbox_id: z.string().optional().describe("Sandbox ID"),
     scenario_name: z.string().optional().describe("Predefined scenario name or custom scenario JSON"),
-    scenario: z.record(z.unknown()).optional().describe("Custom ScenarioDefinition (for run_scenario)"),
-    baseline: z.record(z.unknown()).optional().describe("Baseline behavior profile (for compare)"),
+    scenario: z.record(z.string(), z.unknown()).optional().describe("Custom ScenarioDefinition (for run_scenario)"),
+    baseline: z.record(z.string(), z.unknown()).optional().describe("Baseline behavior profile (for compare)"),
   }).shape,
   async (args) => {
     if (!digitalTwinManager) {
@@ -5863,7 +5863,7 @@ server.tool(
     priority: z.number().optional().describe("Custom priority (higher = harder to evict, for add_item)"),
     total_budget: z.number().optional().describe("New total budget in tokens (for set_total_budget)"),
     limit: z.number().optional().describe("Max eviction log entries to return (for get_eviction_log)"),
-    metadata: z.record(z.unknown()).optional().describe("Optional metadata for the item (for add_item)"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Optional metadata for the item (for add_item)"),
   }).shape,
   async (args) => {
     if (!contextManager) {
@@ -7198,7 +7198,7 @@ server.tool(
     lock_type: z.enum(["read", "write"]).optional().describe("Lock type (for acquire_lock)"),
     ttl_ms: z.number().optional().describe("Lock TTL in ms, max 300000 (for acquire_lock)"),
     event_type: z.string().optional().describe("Event type (for broadcast_state, get_state_log)"),
-    payload: z.record(z.unknown()).optional().describe("Event payload (for broadcast_state)"),
+    payload: z.record(z.string(), z.unknown()).optional().describe("Event payload (for broadcast_state)"),
     since_sequence: z.number().optional().describe("Get events after this sequence number (for get_state_log)"),
     limit: z.number().optional().describe("Max events to return (for get_state_log)"),
   }).shape,
@@ -7556,7 +7556,7 @@ server.tool(
     task: z.string().optional().describe("Task description (for decompose, execute)"),
     profile: z.enum(["code_review_swarm", "security_scan_swarm", "documentation_swarm", "test_coverage_swarm", "dependency_audit_swarm"])
       .optional().describe("Swarm profile (for decompose, execute)"),
-    context: z.record(z.unknown()).optional().describe("Additional context (for execute)"),
+    context: z.record(z.string(), z.unknown()).optional().describe("Additional context (for execute)"),
   }).shape,
   async (args) => {
     if (!microSwarm) {
@@ -7672,7 +7672,7 @@ server.tool(
     operation: z.enum(["get_dag", "live_state", "compare", "history"])
       .describe("Operation to perform"),
     workflow_id: z.string().optional().describe("Workflow ID (for get_dag)"),
-    conductor_state: z.record(z.unknown()).optional().describe("Conductor state JSON (for get_dag)"),
+    conductor_state: z.record(z.string(), z.unknown()).optional().describe("Conductor state JSON (for get_dag)"),
     execution_id_a: z.string().optional().describe("First execution ID (for compare)"),
     execution_id_b: z.string().optional().describe("Second execution ID (for compare)"),
     limit: z.number().optional().describe("Max results (for history)"),
@@ -7946,8 +7946,8 @@ server.tool(
     operation: z.enum(["create", "hot_reload", "test", "compare", "promote", "list"]).describe("Operation to perform"),
     instance_id: z.string().optional().describe("Dev instance ID (for hot_reload/test/compare/promote)"),
     name: z.string().optional().describe("Instance name (for create)"),
-    config: z.record(z.unknown()).optional().describe("Configuration object (for create)"),
-    files: z.record(z.string()).optional().describe("File path -> content map (for hot_reload)"),
+    config: z.record(z.string(), z.unknown()).optional().describe("Configuration object (for create)"),
+    files: z.record(z.string(), z.string()).optional().describe("File path -> content map (for hot_reload)"),
     message: z.string().optional().describe("Test message (for test/compare)"),
   }).shape,
   async (args) => {
@@ -8243,7 +8243,7 @@ server.tool(
     agents: z.array(z.object({
       id: z.string(),
       name: z.string(),
-      metrics: z.record(z.number()),
+      metrics: z.record(z.string(), z.number()),
       capabilities: z.array(z.string()),
       last_active: z.string(),
     })).optional().describe("Agent data for ecosystem assessment (for assess)"),
@@ -8813,7 +8813,7 @@ server.tool(
       .describe("Agent ID (for agent_card lookup, delegate target)"),
     task_type: z.string().optional()
       .describe("Task type (for handle_task, delegate)"),
-    payload: z.record(z.unknown()).optional()
+    payload: z.record(z.string(), z.unknown()).optional()
       .describe("Task payload (for handle_task, delegate)"),
     priority: z.enum(["low", "medium", "high", "critical"]).optional()
       .describe("Task priority (for handle_task, delegate)"),
@@ -8932,7 +8932,7 @@ server.tool(
       .describe("Error message if failed (for observe)"),
     endpoint: z.string().optional()
       .describe("Service endpoint URL (for update)"),
-    response_schema: z.record(z.unknown()).optional()
+    response_schema: z.record(z.string(), z.unknown()).optional()
       .describe("Response schema (for update)"),
     dependencies: z.array(z.string()).optional()
       .describe("Service dependencies (for update)"),
@@ -9169,11 +9169,11 @@ server.tool(
   z.object({
     node_type: z.string().describe("Node label/type (e.g., Agent, Project, PRD)"),
     node_id: z.string().describe("Unique node identifier"),
-    properties: z.record(z.unknown()).optional().describe("Node properties"),
+    properties: z.record(z.string(), z.unknown()).optional().describe("Node properties"),
     edges: z.array(z.object({
       target_id: z.string(),
       relationship: z.string(),
-      properties: z.record(z.unknown()).optional(),
+      properties: z.record(z.string(), z.unknown()).optional(),
     })).optional().describe("Outgoing edges to create"),
   }).shape,
   async (args) => {
@@ -9191,7 +9191,7 @@ server.tool(
   "Run a Cypher query against the Memgraph knowledge graph. Use for complex multi-hop queries.",
   z.object({
     query: z.string().describe("Cypher query string"),
-    parameters: z.record(z.unknown()).optional().describe("Query parameters"),
+    parameters: z.record(z.string(), z.unknown()).optional().describe("Query parameters"),
   }).shape,
   async (args) => {
     try {
