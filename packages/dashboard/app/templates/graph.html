@@ -420,7 +420,7 @@ function renderGraph(data) {
     function labelText(d) {
         if (isProjectView) return d.project;
         if (!d.content) return String(d.id).slice(0, 8);
-        var text = d.content.replace(/^(User prefers|Marc |Remember |Note: |The )/i, '');
+        var text = d.content.replace(/^(User prefers|Remember |Note: |The )/i, '');
         var label = text.slice(0, 30) + (text.length > 30 ? '...' : '');
         return d.dup_count > 1 ? label + ' ×' + d.dup_count : label;
     }
