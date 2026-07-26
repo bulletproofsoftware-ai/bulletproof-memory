@@ -81,38 +81,39 @@ def hash_password(password: str, *, iterations: int = _PBKDF2_ITERATIONS) -> str
 def verify_password(password: str) -> bool:
     """Check a login password against DASHBOARD_PASS_HASH.
 
-    Two formats are accepted:
+    Only ``pbkdf2_sha256$<iterations>$<salt>$<hash>`` is accepted: salted and
+    slow, so a leaked hash cannot be reversed with a rainbow table or
+    brute-forced at GPU speed. Generate one with ``hash_password`` — see
+    docs/INSTALL.md.
 
-    * ``pbkdf2_sha256$<iterations>$<salt>$<hash>`` — preferred. Salted and slow,
-      so a leaked hash cannot be reversed with a rainbow table or brute-forced at
-      GPU speed.
-    * a bare 64-char SHA-256 hex digest — the original format. Unsalted and fast,
-      so it stays supported only to avoid locking out existing deployments on
-      upgrade. Regenerate with ``hash_password`` and replace the env value.
+    The bare 64-char SHA-256 digest this once accepted is no longer honoured.
+    It was unsalted and fast, which is exactly what an attacker holding the
+    env file wants, and keeping it meant a deployment could sit on the weak
+    format indefinitely. A deployment still carrying one must regenerate the
+    value; logins fail closed with a clear log line until it does.
 
-    Both paths compare with ``hmac.compare_digest``; the previous ``==`` leaked
-    the position of the first differing byte through timing.
+    Comparison is ``hmac.compare_digest``; a plain ``==`` leaked the position
+    of the first differing byte through timing.
     """
     if not DASH_PASS_HASH:
         return False
 
-    if DASH_PASS_HASH.startswith(_PBKDF2_PREFIX):
-        try:
-            _, iterations, salt, expected = DASH_PASS_HASH.split("$", 3)
-            dk = hashlib.pbkdf2_hmac(
-                "sha256", password.encode(), bytes.fromhex(salt), int(iterations)
-            )
-        except (ValueError, TypeError):
-            log.warning("DASHBOARD_PASS_HASH is malformed; refusing all logins")
-            return False
-        return hmac.compare_digest(dk.hex(), expected)
+    if not DASH_PASS_HASH.startswith(_PBKDF2_PREFIX):
+        log.warning(
+            "DASHBOARD_PASS_HASH is not in pbkdf2_sha256 format; refusing all "
+            "logins. Regenerate it with the helper in docs/INSTALL.md."
+        )
+        return False
 
-    log.warning(
-        "DASHBOARD_PASS_HASH uses the legacy unsalted SHA-256 format. "
-        "Regenerate it with the pbkdf2 helper documented in docs/INSTALL.md."
-    )
-    h = hashlib.sha256(password.encode()).hexdigest()
-    return hmac.compare_digest(h, DASH_PASS_HASH)
+    try:
+        _, iterations, salt, expected = DASH_PASS_HASH.split("$", 3)
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt), int(iterations)
+        )
+    except (ValueError, TypeError):
+        log.warning("DASHBOARD_PASS_HASH is malformed; refusing all logins")
+        return False
+    return hmac.compare_digest(dk.hex(), expected)
 
 
 def create_session_token(username: str) -> str:
