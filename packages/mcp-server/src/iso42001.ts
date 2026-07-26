@@ -581,9 +581,19 @@ export function computeGapRecommendation(
  */
 export async function generateComplianceReport(
   opts: { period_start: string; period_end: string; controls?: string[] },
-  deps: { scrollAuditLog: (filter?: Record<string, unknown>, limit?: number) => Promise<AuditEvent[]> },
+  deps: {
+    scrollAuditLog: (
+      filter?: Record<string, unknown>,
+      limit?: number,
+      offset?: string | number,
+    ) => Promise<AuditEvent[]>;
+  },
 ): Promise<ComplianceReport> {
-  // Build Qdrant filter for the time period so filtering happens server-side
+  // Build Qdrant filter for the time period so filtering happens server-side.
+  // The window is fixed for every page — pagination advances by point id, not by
+  // timestamp. A timestamp cursor lost data two ways: `gt: lastTimestamp` dropped
+  // every other event sharing that millisecond, and scroll orders by point id
+  // rather than timestamp, so the last row of a page is not the page's newest.
   const timeFilter: Record<string, unknown> = {
     must: [
       { key: "timestamp", range: { gte: opts.period_start } },
@@ -591,22 +601,32 @@ export async function generateComplianceReport(
     ],
   };
 
-  // Fetch audit events with time filtering and pagination
+  // Fetch audit events with time filtering and id-cursor pagination
   const PAGE_SIZE = 1000;
   const allEvents: AuditEvent[] = [];
-  let batch: AuditEvent[];
-  do {
-    batch = await deps.scrollAuditLog(timeFilter, PAGE_SIZE);
-    allEvents.push(...batch);
-    // If we got a full page, there may be more — adjust filter to fetch next page
-    if (batch.length === PAGE_SIZE && batch.length > 0) {
-      const lastTimestamp = batch[batch.length - 1].timestamp;
-      timeFilter.must = [
-        { key: "timestamp", range: { gt: lastTimestamp } },
-        { key: "timestamp", range: { lte: opts.period_end } },
-      ];
+  const seenIds = new Set<string | number>();
+  let offset: string | number | undefined;
+  for (;;) {
+    const batch = await deps.scrollAuditLog(timeFilter, PAGE_SIZE, offset);
+    if (batch.length === 0) break;
+
+    let added = 0;
+    for (const event of batch) {
+      // Qdrant's scroll offset is inclusive, so each page after the first repeats
+      // the cursor point.
+      if (event.id !== undefined && seenIds.has(event.id)) continue;
+      if (event.id !== undefined) seenIds.add(event.id);
+      allEvents.push(event);
+      added++;
     }
-  } while (batch.length === PAGE_SIZE);
+
+    if (batch.length < PAGE_SIZE) break;
+
+    const nextOffset = batch[batch.length - 1].id;
+    // No usable cursor, or the page advanced nothing — stop rather than loop forever.
+    if (nextOffset === undefined || nextOffset === offset || added === 0) break;
+    offset = nextOffset;
+  }
 
   // Determine which controls to assess
   let controlsToAssess = ISO42001_CONTROLS;

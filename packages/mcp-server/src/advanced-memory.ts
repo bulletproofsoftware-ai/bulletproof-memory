@@ -497,25 +497,30 @@ export class FederationManager {
     const scopeIndex = scopeHierarchy.indexOf(scope);
     const allowedScopes = scopeHierarchy.slice(0, scopeIndex + 1);
 
+    // Memories with no federation_scope field are treated as the most restrictive
+    // level ("private"), so they are only in play when the caller explicitly asked
+    // to sync at that level. Selecting them here — rather than retrying the scroll
+    // without a filter — is what keeps an empty result set from widening into a
+    // full-collection export.
+    const scopeConditions: Record<string, unknown>[] = allowedScopes.map((s) => ({
+      key: "federation_scope",
+      match: { value: s },
+    }));
+    if (allowedScopes.includes("private")) {
+      scopeConditions.push({ is_empty: { key: "federation_scope" } });
+    }
+
     // Get local memories with matching scope
-    let localMemories = await this.deps.scrollPoints(
+    const localMemories = await this.deps.scrollPoints(
       collection,
-      {
-        should: allowedScopes.map((s) => ({
-          key: "federation_scope",
-          match: { value: s },
-        })),
-      },
+      { should: scopeConditions },
       100
     ) as any[];
 
-    // Fallback: if filtered scroll returned nothing (e.g., federation_scope field absent),
-    // retry without the filter so we don't silently skip all memories.
     if (localMemories.length === 0) {
       console.error(
-        "[FEDERATION] WARNING: Scoped scroll returned 0 results; retrying without federation_scope filter"
+        `[FEDERATION] No memories matched scope <= "${scope}" in ${collection}; nothing to sync`
       );
-      localMemories = await this.deps.scrollPoints(collection, undefined, 100) as any[];
     }
 
     for (const mem of localMemories) {

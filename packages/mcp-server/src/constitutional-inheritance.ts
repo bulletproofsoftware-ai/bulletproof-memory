@@ -137,18 +137,24 @@ export class ConstitutionalInheritanceManager {
   ): Promise<ConstitutionalContract> {
     let chainDepth = 0;
 
-    // If there is a parent, validate the contract can be created
+    // If there is a parent, validate the contract can be created. A missing parent
+    // must fail closed: silently skipping validation here would let any caller
+    // claim an unresolvable parent_id and receive unconstrained permissions at
+    // chain depth 0 — a root contract wearing a child's clothes.
     if (parentId) {
       const parentContract = await this.getContract(parentId);
-      if (parentContract) {
-        const validation = this.validateConstraintsAgainstParent(constraints, parentContract.constraints);
-        if (!validation.valid) {
-          throw new Error(
-            `Contract validation failed: child cannot exceed parent permissions. Violations: ${validation.violations.join("; ")}`
-          );
-        }
-        chainDepth = parentContract.chain_depth + 1;
+      if (!parentContract) {
+        throw new Error(
+          `Contract validation failed: parent contract ${parentId} not found; refusing to create an unvalidated child contract`
+        );
       }
+      const validation = this.validateConstraintsAgainstParent(constraints, parentContract.constraints);
+      if (!validation.valid) {
+        throw new Error(
+          `Contract validation failed: child cannot exceed parent permissions. Violations: ${validation.violations.join("; ")}`
+        );
+      }
+      chainDepth = parentContract.chain_depth + 1;
     }
 
     const id = this.deps.generateUUID();

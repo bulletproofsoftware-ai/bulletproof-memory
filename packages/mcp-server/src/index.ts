@@ -1233,7 +1233,8 @@ function isExpired(point: any): boolean {
 async function scrollPoints(
   collection: string,
   filter?: Record<string, unknown>,
-  limit: number = 100
+  limit: number = 100,
+  offset?: string | number
 ): Promise<unknown[]> {
   const body: Record<string, unknown> = {
     limit,
@@ -1241,6 +1242,10 @@ async function scrollPoints(
     with_vector: false,
   };
   if (filter) body.filter = filter;
+  // Qdrant paginates scroll by point id (its own stable ordering). `offset` is
+  // inclusive, so callers that page with the previous page's last id must
+  // de-duplicate that one repeated point.
+  if (offset !== undefined) body.offset = offset;
 
   const result = await qdrantRequest("POST", `/collections/${collection}/points/scroll`, body) as { result: { points: unknown[] } };
   return result.result?.points || [];
@@ -4474,8 +4479,8 @@ server.tool(
       const periodStart = new Date(now.getTime() - args.period_days * 24 * 60 * 60 * 1000);
 
       const deps = {
-        scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number) => {
-          const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000);
+        scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number, offset?: string | number) => {
+          const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000, offset);
           return points.map((p: any) => ({
             id: p.id,
             action: p.payload?.action || "",
@@ -4546,8 +4551,8 @@ server.tool(
       const periodStart = new Date(now.getTime() - args.period_days * 24 * 60 * 60 * 1000);
 
       const deps = {
-        scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number) => {
-          const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000);
+        scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number, offset?: string | number) => {
+          const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000, offset);
           return points.map((p: any) => ({
             id: p.id,
             action: p.payload?.action || "",
@@ -9115,8 +9120,8 @@ function startGovernanceHttpServer(): void {
           const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
 
           const deps = {
-            scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number) => {
-              const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000);
+            scrollAuditLog: async (filter?: Record<string, unknown>, limit?: number, offset?: string | number) => {
+              const points = await scrollPoints(COLLECTIONS.AUDIT_LOG, filter, limit || 10000, offset);
               return points.map((p: any) => ({
                 id: p.id,
                 action: p.payload?.action || "",
