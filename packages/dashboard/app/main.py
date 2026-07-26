@@ -28,6 +28,20 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("memory-dashboard")
 
+
+def _lg(value: object, limit: int = 200) -> str:
+    """Render an untrusted value safe for a single log line.
+
+    Login form fields and memory ids reach the log. Written verbatim, a CR/LF
+    in one of them forges additional entries -- a failed login for
+    "bob\\nINFO: Login successful for admin" would otherwise appear in the log
+    as a successful admin login (CodeQL py/log-injection).
+    """
+    text = str(value)
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    text = "".join(ch if ch.isprintable() else "\\x%02x" % ord(ch) for ch in text)
+    return text[:limit] + ("…" if len(text) > limit else "")
+
 config = {}
 qdrant_url = ""
 qdrant_api_key = ""
@@ -125,6 +139,26 @@ async def qdrant_request(
     method: str, path: str, body: dict | None = None, timeout: float = 10
 ) -> dict:
     """Make a request to the Qdrant REST API using persistent client."""
+    # The target is built by concatenating qdrant_url and path, so path decides
+    # what the final URL means. The dangerous shape is a path beginning "@":
+    # "http://qdrant:6333" + "@evil.example/x" parses with qdrant:6333 demoted
+    # to userinfo and evil.example as the host, which would send the request --
+    # carrying the api-key header -- to that host. Verified with urlsplit; note
+    # that a leading "//" does NOT move the host here, because qdrant_url
+    # already supplies an authority. Rejected anyway, along with traversal and
+    # control characters, since none of them belong in a rooted API path.
+    # Callers always pass one, e.g. f"/collections/{collection}/points/search",
+    # so the invariant is asserted rather than assumed of every future caller
+    # (CodeQL py/partial-ssrf).
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise ValueError(f"qdrant path must be rooted: {path!r}")
+    if path.startswith("//") or path.startswith("/\\"):
+        raise ValueError(f"qdrant path must not carry an authority: {path!r}")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path):
+        raise ValueError("qdrant path must not contain control characters")
+    if any(seg == ".." for seg in path.split("/")):
+        raise ValueError(f"qdrant path must not traverse: {path!r}")
+
     client = http_client
     if client is None:
         # Fallback if called before lifespan (shouldn't happen)
@@ -372,9 +406,9 @@ async def login_submit(username: str = Form(...), password: str = Form(...)):
             samesite="strict",
             max_age=SESSION_MAX_AGE,
         )
-        log.info("Login successful for %s", username)
+        log.info("Login successful for %s", _lg(username))
         return response
-    log.warning("Login failed for %s", username)
+    log.warning("Login failed for %s", _lg(username))
     return RedirectResponse("/login?error=invalid", status_code=303)
 
 
@@ -1406,7 +1440,7 @@ async def _log_audit(
     audit_text = f"dashboard_{action} {memory_id} {details.get('content_preview', '')[:100]}"
     vector = await embed_text(audit_text)
     if not vector:
-        log.warning("Failed to embed audit entry for %s/%s", action, memory_id)
+        log.warning("Failed to embed audit entry for %s/%s", _lg(action), _lg(memory_id))
         return
 
     point_id = str(uuid.uuid4())
