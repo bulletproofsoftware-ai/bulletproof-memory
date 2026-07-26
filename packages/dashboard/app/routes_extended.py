@@ -7,12 +7,15 @@ from main's auth_middleware (every path starts with /api/).
 
 main wires its helpers in via bind() to avoid a circular import.
 """
+import logging
 import time
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 import discovery
+
+log = logging.getLogger("memory-dashboard")
 
 router = APIRouter()
 
@@ -238,7 +241,16 @@ async def api_sessions():
                 "available": True,
                 "recent": [{k: _coerce(v) for k, v in dict(r).items()} for r in rows],
             }
-        except Exception as e:
-            transcripts = {"count": 0, "recent": [], "available": False, "error": str(e)}
+        except Exception:
+            # The exception text is a database error: it can name schemas, columns
+            # and connection parameters. Log it for the operator, and tell the
+            # caller only that the source was unavailable.
+            log.exception("session_transcripts query failed")
+            transcripts = {
+                "count": 0,
+                "recent": [],
+                "available": False,
+                "error": "session transcripts unavailable; see server logs",
+            }
     data["transcripts"] = transcripts
     return data

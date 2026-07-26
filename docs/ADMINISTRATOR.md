@@ -43,7 +43,7 @@ All configuration is environment-driven via `.env` (from
 | `MEMPG_PASSWORD` | Postgres password | strong random |
 | `N8N_ENCRYPTION_KEY` | Encrypts n8n's stored credentials | `openssl rand -hex 24` |
 | `GOVERNANCE_API_KEY` | Guards the MCP governance HTTP endpoint (`:5681`) | `openssl rand -hex 32` |
-| `DASHBOARD_PASS_HASH` | Dashboard login (SHA-256 of the password) | `python3 -c "import hashlib;print(hashlib.sha256('PW'.encode()).hexdigest())"` |
+| `DASHBOARD_PASS_HASH` | Dashboard login (salted PBKDF2-HMAC-SHA256, 600k iterations) | see [INSTALL](INSTALL.md) for the generator; the legacy bare SHA-256 digest still authenticates but logs a warning |
 | `SESSION_SECRET` | Dashboard session signing | `python3 -c "import secrets;print(secrets.token_hex(32))"` |
 
 > **Do not ship the defaults.** `QDRANT_API_KEY=bpm-dev-local-key-change-me` and the

@@ -85,7 +85,7 @@ The installer prints these; they're required for full functionality:
    - an **Anthropic API** credential (for the LLM-driven abstraction/report workflows).
 2. **Set a dashboard password.** Generate a hash and put it in `.env`, then re-apply:
    ```bash
-   python3 -c "import hashlib;print(hashlib.sha256('YOUR_PASSWORD'.encode()).hexdigest())"
+   python3 -c "import hashlib,secrets;p='YOUR_PASSWORD';s=secrets.token_hex(16);print('pbkdf2_sha256\$600000\$'+s+'\$'+hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.fromhex(s),600000).hex())"
    # paste into DASHBOARD_PASS_HASH in .env, then:
    docker compose up -d
    ```

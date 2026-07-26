@@ -13,6 +13,7 @@
  *   npx tsx scripts/backfill-classify.ts --help                              # Show usage
  */
 
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -27,7 +28,9 @@ const BATCH_SIZE = 25;
 const BATCH_DELAY_MS = 2000;
 const SCROLL_LIMIT = 100;
 
-const SESSION_ID = `backfill_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+// randomBytes, not Math.random: this id is written into audit rows, so it wants
+// to be unguessable rather than merely unlikely to collide.
+const SESSION_ID = `backfill_${Date.now()}_${randomBytes(4).toString("hex")}`;
 
 // TTL constants (in milliseconds)
 const TTL = {
