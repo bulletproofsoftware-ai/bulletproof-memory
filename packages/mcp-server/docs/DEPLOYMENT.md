@@ -344,6 +344,5 @@ npm run self-test --category all
 
 ## Support
 
-- **Specs:** [docs/specs/2026-07-02-openmemory-3-features-spec.md](docs/specs/2026-07-02-openmemory-3-features-spec.md)
-- **Self-test:** [docs/self-test.md](docs/self-test.md)
+- **Self-test:** [`self-test.md`](self-test.md)
 - **Issues:** Check logs and run `npm run self-test --json` for diagnostics
