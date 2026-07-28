@@ -71,12 +71,12 @@ Pinned in [`packages/dashboard/app/requirements.txt`](../packages/dashboard/app/
 
 | Package | Version | License | Role |
 |---------|---------|---------|------|
-| `fastapi` | 0.115.12 | MIT | Web framework |
-| `uvicorn` | 0.34.2 | BSD-3-Clause | ASGI server |
+| `fastapi` | 0.140.0 | MIT | Web framework |
+| `uvicorn` | 0.51.0 | BSD-3-Clause | ASGI server |
 | `httpx` | 0.28.1 | BSD-3-Clause | Async HTTP client (talks to Qdrant/Ollama) |
 | `jinja2` | 3.1.6 | BSD-3-Clause | HTML templating |
-| `pyyaml` | 6.0.2 | MIT | Config parsing (`config.yaml`) |
-| `asyncpg` | 0.30.0 | Apache-2.0 | Async Postgres driver |
+| `pyyaml` | 6.0.3 | MIT | Config parsing (`config.yaml`) |
+| `asyncpg` | 0.31.0 | Apache-2.0 | Async Postgres driver |
 | `python-multipart` | 0.0.32 | Apache-2.0 | Form parsing |
 | `itsdangerous` | 2.2.0 | BSD-3-Clause | Session-cookie signing |
 
