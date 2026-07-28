@@ -3621,6 +3621,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:asyncpg-0.31.0-cp310-cp310-macosx_10_9_x86_64.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "831712dd3cf117eec68575a9b50da711893fd63ebe277fc155ecae1c6c9f0f61"
         }
       ]
     },
@@ -3634,6 +3644,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:fastapi-0.140.0-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e951c0a0d9540bf5d9a2a9e078fd415da2ab7e312d435139e7d9e2e7fe9f0b23"
         }
       ]
     },
@@ -3654,6 +3674,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:httpx-0.28.1-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"
         }
       ]
     },
@@ -3674,6 +3704,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:itsdangerous-2.2.0-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef"
         }
       ]
     },
@@ -3694,6 +3734,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:jinja2-3.1.6-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
         }
       ]
     },
@@ -3707,6 +3757,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:python_multipart-0.0.32-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23"
         }
       ]
     },
@@ -3727,6 +3787,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:pyyaml-6.0.3-cp310-cp310-macosx_10_13_x86_64.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "214ed4befebe12df36bcc8bc2b64b396ca31be9304b8f59e25c11cf94a4c033b"
         }
       ]
     },
@@ -3740,6 +3810,16 @@
         {
           "name": "aquasecurity:trivy:PkgType",
           "value": "pip"
+        },
+        {
+          "name": "bulletproof:hash-source",
+          "value": "pypi:uvicorn-0.51.0-py3-none-any.whl"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5d38af6cd620f2ae3849fb44fd4879e0890aa1febe8d47eb355fb45d93fe6a5b"
         }
       ]
     }
